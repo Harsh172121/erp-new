@@ -1,0 +1,222 @@
+import apiService, { postFile, putWithFile, resolveApiErrorMessage } from './apiService';
+
+export { resolveApiErrorMessage };
+
+// Feeds the stat cards above the item list, which every module can open but only inventory roles
+// can read stock totals for — so a 403 here leaves the cards empty rather than raising a toast.
+export const getInventorySummary = () => apiService.get('/inventory/summary', {}, { quietForbidden: true });
+
+export const searchInventoryItems = (params = {}) =>
+    apiService.get('/inventory_item/search', params);
+
+export const getAllInventoryItems = (params = {}) =>
+    apiService.get('/inventory_item/all', params);
+
+export const getInventoryItem = (id) =>
+    apiService.get(`/inventory_item/${id}`);
+
+export const filterInventoryItems = (payload) =>
+    apiService.post('/inventory_item/filter', payload);
+
+export const deleteInventoryItem = (id) =>
+    apiService.delete(`/inventory_item/${id}`);
+
+export const createInventoryItemWithFiles = (payload, attachments = []) =>
+    postFile('/inventory_item/add', payload, attachments);
+
+export const updateInventoryItemWithFiles = (id, payload, attachments = []) =>
+    putWithFile(`/inventory_item/${id}`, payload, attachments);
+
+// ── Item revision control ────────────────────────────────────────────────────
+export const getItemRevisionHistory = (itemId) =>
+    apiService.get(`/inventory_item/${itemId}/revisions`);
+
+export const reviseItem = (itemId, payload = {}) =>
+    apiService.post(`/inventory_item/${itemId}/revisions/revise`, payload);
+
+export const updateDraftRevision = (revisionId, payload) =>
+    apiService.put(`/inventory_item/revisions/${revisionId}`, payload);
+
+export const submitRevisionForApproval = (revisionId) =>
+    apiService.post(`/inventory_item/revisions/${revisionId}/submit`, {});
+
+export const releaseRevision = (revisionId, payload = {}) =>
+    apiService.post(`/inventory_item/revisions/${revisionId}/release`, payload);
+
+export const obsoleteRevision = (revisionId) =>
+    apiService.post(`/inventory_item/revisions/${revisionId}/obsolete`, {});
+
+// Which attachment the item's drawing number opens (item list, BOM screens).
+export const setItemDrawingAttachment = (itemId, attachmentId) =>
+    apiService.put(`/inventory_item/${itemId}/drawing/${attachmentId}`, {});
+
+export const clearItemDrawingAttachment = (itemId) =>
+    apiService.delete(`/inventory_item/${itemId}/drawing`);
+
+// Only a DRAFT or PENDING_APPROVAL revision — one that was never released — can be deleted.
+export const deleteUnreleasedRevision = (revisionId) =>
+    apiService.delete(`/inventory_item/revisions/${revisionId}`);
+
+export const receiveStock = (payload) =>
+    apiService.post('/inventory/add-instances', payload);
+
+export const getGroupedInventoryRequests = (params = {}) =>
+    apiService.get('/inventory/requests/grouped', params);
+
+export const approveInventoryRequest = ({ requestId, approvedBy, approvalRemarks }) =>
+    apiService.put(
+        `/inventory/requests/approve?requestId=${requestId}` +
+        `&approvedBy=${encodeURIComponent(approvedBy)}` +
+        `&approvalRemarks=${encodeURIComponent(approvalRemarks)}`,
+        {}
+    );
+
+export const rejectInventoryRequest = ({ requestId, approvedBy, approvalRemarks }) =>
+    apiService.put(
+        `/inventory/requests/reject?requestId=${requestId}` +
+        `&approvedBy=${encodeURIComponent(approvedBy)}` +
+        `&approvalRemarks=${encodeURIComponent(approvalRemarks)}`,
+        {}
+    );
+
+export const createInventoryRequest = (params) =>
+    apiService.post(`/inventory/requests?${params.toString()}`);
+
+export const getProcurementOrders = (params = {}) =>
+    apiService.get('/inventory/inventory-procurement-orders', params);
+
+export const markProcurementOrderReceived = (id, completedBy) =>
+    apiService.put(`/inventory/inventory-procurement-orders/${id}/complete`, null, {
+        params: { completedBy },
+    });
+
+export const getPresentInventory = (params = {}) =>
+    apiService.get('/inventory/present', params);
+
+export const getGroupedInventory = (params = {}) =>
+    apiService.get('/inventory/grouped', params);
+
+export const updateInventory = (id, payload) =>
+    apiService.put(`/inventory/${id}`, payload);
+
+export const addInventory = (payload) =>
+    apiService.post(`/inventory/add?qty=${payload.quantity}`, payload);
+
+// ── Sprint 2-A: Physical Stock Count ─────────────────────────────────────────
+export const submitStockCount = (payload) =>
+    apiService.post('/inventory/stock-count', payload);
+
+// ── Sprint 2-B: Stock Valuation Report ───────────────────────────────────────
+export const getStockValuation = (params = {}) =>
+    apiService.get('/inventory/valuation-report', params);
+
+// `warehouse` is the code of the warehouse the stock is wanted in; blank is the default warehouse.
+export const sendToPlanning = (itemId, qty, requestedBy, warehouse = '') =>
+    apiService.post(`/inventory/items/${itemId}/send-to-planning`, { qty, requestedBy, warehouse });
+
+// ── Sprint 2-C: Low Stock (for reorder alerts drawer) ────────────────────────
+export const getLowStockItems = (params = {}) =>
+    apiService.get('/inventory_item/search', { ...params, lowStockOnly: true, size: 200 });
+
+// ── Work Order Material Requests ──────────────────────────────────────────────
+export const getPendingMaterialRequests = (params = {}) =>
+    apiService.get('/material-requests/pending', params);
+
+// The stores' register: every request in any state, with filters.
+//   status: OPEN (pending + partly issued) | PENDING | PARTIAL | APPROVED | REJECTED | ALL
+//   source: STORES (all the stores act on) | WORK_ORDER | MANUAL | REORDER | SALES_ORDER (read-only)
+//   q: part of an item code, item name or reference;  from / to: yyyy-MM-dd raised dates
+export const getMaterialRequestRegister = (params = {}) =>
+    apiService.get('/material-requests/register', params);
+
+export const getMaterialRequestSummary = () =>
+    apiService.get('/material-requests/summary');
+
+export const getMaterialRequestsForWorkOrder = (workOrderId) =>
+    apiService.get(`/material-requests/work-order/${workOrderId}`);
+
+// `force=true` confirms an approval that drives available stock negative (items that allow it);
+// without it, such approvals respond 409 { requiresConfirmation: true } so the UI can prompt.
+export const approveMaterialRequest = (requestId, force = false) =>
+    apiService.post(`/material-requests/${requestId}/approve?force=${force}`, {});
+
+export const partialApproveMaterialRequest = (requestId, approvedQuantity, force = false) =>
+    apiService.post(`/material-requests/${requestId}/partial-approve?force=${force}`, { approvedQuantity });
+
+export const rejectMaterialRequest = (requestId, reason) =>
+    apiService.post(`/material-requests/${requestId}/reject`, { reason });
+
+const EXPORT_CONFIGS = {
+    catalog:          { path: '/inventory_item/export/catalog',          filename: 'Product_Catalog.xlsx' },
+    bulk:             { path: '/inventory_item/export/bulk',             filename: 'Bulk_Item_Master.xlsx' },
+    pdf:              { path: '/inventory_item/export/pdf',              filename: 'Product_Master_Data_Sheet.pdf' },
+    'vendor-prices':  { path: '/inventory_item/export/vendor-prices',   filename: 'Vendor_Price_Comparison.xlsx' },
+    'gst-import':     { path: '/inventory_item/export/gst-import',      filename: 'GST_EWay_Tally_Import.xlsx' },
+    'low-stock-indent': { path: '/inventory_item/export/low-stock-indent', filename: 'Low_Stock_Purchase_Indent.xlsx' },
+    'job-work-items': { path: '/inventory_item/export/job-work-items',  filename: 'Job_Work_Items.xlsx' },
+};
+
+export const getAttachmentBlob = (fileId) => apiService.fetchBlob(`/inventory_item/download/${fileId}`);
+
+export const exportInventoryItems = (type, ids = []) => {
+    const { path, filename } = EXPORT_CONFIGS[type];
+    const params = ids.length ? { ids: ids.join(',') } : {};
+    return apiService.download(path, params, filename);
+};
+
+/**
+ * Exports a sales price list.
+ *
+ * Pass `itemIds` for an explicit selection, otherwise `filter` (the same shape the grid posts to
+ * /filter) to export everything matching the current filter. `audience: 'INTERNAL'` adds floor
+ * price and max discount and requires finance-level roles; 'CUSTOMER' is list price + GST only.
+ */
+export const exportPriceList = ({
+    itemIds = [],
+    filter = null,
+    format = 'PDF',
+    audience = 'CUSTOMER',
+    validUntil,
+    customerName,
+    title,
+    preparedBy,
+} = {}) => {
+    const isExcel = String(format).toUpperCase() === 'XLSX';
+    const body = { format, audience, validUntil, customerName, title, preparedBy };
+
+    if (itemIds.length) {
+        body.itemIds = itemIds;
+    } else if (filter) {
+        body.filter = filter;
+    }
+
+    const filename = `Price_List.${isExcel ? 'xlsx' : 'pdf'}`;
+    return apiService.downloadPost('/inventory_item/export/price-list', body, filename);
+};
+
+const inventoryService = {
+    getInventorySummary,
+    searchInventoryItems,
+    getAllInventoryItems,
+    getInventoryItem,
+    filterInventoryItems,
+    deleteInventoryItem,
+    createInventoryItemWithFiles,
+    updateInventoryItemWithFiles,
+    receiveStock,
+    getGroupedInventoryRequests,
+    approveInventoryRequest,
+    rejectInventoryRequest,
+    createInventoryRequest,
+    getProcurementOrders,
+    markProcurementOrderReceived,
+    getPresentInventory,
+    getGroupedInventory,
+    updateInventory,
+    addInventory,
+    getAvailableInstancesWithDetails: (itemId) => apiService.get(`/inventory/instances/available/${itemId}`),
+    getInstanceHistory: (id) => apiService.get(`/inventory/instances/${id}/history`),
+    getAttachmentBlob,
+};
+
+export default inventoryService;

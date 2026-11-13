@@ -1,0 +1,138 @@
+import {
+    FactoryOutlined,
+    AccountBalanceOutlined,
+    BadgeOutlined,
+    PaymentsOutlined,
+    ReceiptLongOutlined,
+    BarChartOutlined,
+    HomeOutlined,
+    SettingsOutlined,
+    GavelOutlined,
+    AccountBalanceWalletOutlined,
+    InsightsOutlined,
+    PlaylistAddCheckOutlined,
+} from "@mui/icons-material";
+import { MODULE_KEYS } from "../auth/roles";
+
+export const MODULES = [
+    {
+        key: "operations",
+        label: "Operations",
+        description: "Production, Inventory, Sales & Purchase",
+        Icon: FactoryOutlined,
+        landingRoute: "/dashboard",
+        moduleKey: null,
+        status: "active",
+        color: "#3b82f6",
+        legacySidebar: true,
+    },
+    {
+        key: "accounting",
+        label: "Accounting",
+        description: "Books, Vouchers, Reports & GST",
+        Icon: AccountBalanceOutlined,
+        landingRoute: "/accounting",
+        moduleKey: MODULE_KEYS.ACCOUNTING,
+        status: "active",
+        color: "#10b981",
+        // Six sections, in the order a day's work runs: enter, bank, review, file, set up.
+        nav: [
+            { text: "Home", Icon: HomeOutlined, path: "/accounting" },
+            {
+                text: "Transactions",
+                Icon: ReceiptLongOutlined,
+                children: [
+                    { text: "New Voucher", path: "/accounting/vouchers/new" },
+                    { text: "Voucher Register", path: "/accounting/vouchers" },
+                    { text: "Day Book", path: "/accounting/reports/day-book" },
+                    { text: "Payroll", path: "/accounting/vouchers/payroll" },
+                    { text: "Depreciation", path: "/accounting/vouchers/depreciation" },
+                ],
+            },
+            {
+                text: "Banking",
+                Icon: AccountBalanceWalletOutlined,
+                children: [
+                    { text: "Reconciliation", path: "/accounting/bank/reconciliation" },
+                ],
+            },
+            {
+                text: "Reports",
+                Icon: BarChartOutlined,
+                children: [
+                    { text: "Trial Balance", path: "/accounting/reports/trial-balance" },
+                    { text: "Profit & Loss", path: "/accounting/reports/profit-loss" },
+                    { text: "Balance Sheet", path: "/accounting/reports/balance-sheet" },
+                    { text: "Ledger", path: "/accounting/reports/ledger" },
+                    { text: "Debtors Ageing", path: "/accounting/reports/debtors-ageing" },
+                    { text: "Creditors Ageing", path: "/accounting/reports/creditors-ageing" },
+                    { text: "Stock vs GL", path: "/accounting/reports/stock-gl" },
+                    { text: "Audit Trail", path: "/accounting/reports/audit-trail" },
+                ],
+            },
+            {
+                text: "GST & TDS",
+                Icon: GavelOutlined,
+                children: [
+                    { text: "GSTR-1", path: "/accounting/gst/gstr1" },
+                    { text: "GSTR-3B", path: "/accounting/gst/gstr3b" },
+                    { text: "GST Filings", path: "/accounting/gst/filings" },
+                    { text: "HSN Summary", path: "/accounting/gst/hsn" },
+                    { text: "Outward Register", path: "/accounting/gst/register/outward" },
+                    { text: "Inward Register", path: "/accounting/gst/register/inward" },
+                    { text: "TDS Register", path: "/accounting/tds/register" },
+                    { text: "TDS Challans", path: "/accounting/tds/challans" },
+                    { text: "TDS Sections", path: "/accounting/tds/sections" },
+                ],
+            },
+            {
+                text: "Setup",
+                Icon: SettingsOutlined,
+                children: [
+                    { text: "Chart of Accounts", path: "/accounting/masters/coa" },
+                    { text: "Opening Balances", path: "/accounting/masters/opening-balances" },
+                    { text: "Financial Years", path: "/accounting/masters/financial-years" },
+                ],
+            },
+        ],
+    },
+    {
+        key: "planning",
+        label: "Planning",
+        description: "Procurement Planning Desk — Make or Buy decisions",
+        Icon: InsightsOutlined,
+        landingRoute: "/planning",
+        moduleKey: MODULE_KEYS.PLANNING,
+        status: "active",
+        color: "#0ea5e9",
+        nav: [
+            {
+                text: "Procurement",
+                Icon: PlaylistAddCheckOutlined,
+                children: [
+                    { text: "Planning Desk", path: "/planning/desk" },
+                ],
+            },
+        ],
+    },
+    {
+        key: "hr",
+        label: "HR",
+        description: "Employee Management, Leave & Attendance",
+        Icon: BadgeOutlined,
+        landingRoute: "/hr",
+        moduleKey: MODULE_KEYS.HR,
+        status: "coming_soon",
+        color: "#8b5cf6",
+    },
+    {
+        key: "payroll",
+        label: "Payroll",
+        description: "Salary Processing, TDS & Payslips",
+        Icon: PaymentsOutlined,
+        landingRoute: "/payroll",
+        moduleKey: MODULE_KEYS.PAYROLL,
+        status: "coming_soon",
+        color: "#f59e0b",
+    },
+];

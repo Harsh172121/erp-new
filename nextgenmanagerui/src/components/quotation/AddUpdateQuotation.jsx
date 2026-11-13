@@ -1,0 +1,704 @@
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useFormik } from "formik";
+import * as Yup from "yup";
+import {
+    Autocomplete, Box, Button,
+    Grid, Paper,
+    Table, TableBody, TableCell,
+    TableContainer, TableHead, TableRow,
+    TextField,
+    Typography,
+    MenuItem,
+    Stack,
+    IconButton,
+    Divider,
+    Container,
+    Avatar,
+    Chip,
+    CircularProgress,
+    Alert,
+    Tooltip
+} from "@mui/material";
+import { inventoryItemSearch, searchEnquiry } from "../../services/commonAPI";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import apiService from "../../services/apiService";
+import { serverFiltered, renderItemOption } from '../common/itemPicker';
+import PriceFloorHint, { floorOf, isBelowFloor, fromRupees } from '../common/PriceFloorHint';
+import CurrencySelect, { ExchangeRateField } from '../common/CurrencySelect';
+import { formatMoney, isRupee, latestRate } from '../common/currency';
+import { useAuth } from '../../auth/AuthContext';
+import { SALES_MANAGE_ROLES } from '../../auth/roles';
+import { 
+    Add, RemoveCircle, Info, Description, 
+    AttachMoney, LocalShipping, Receipt, Note, 
+    ChevronLeft, Save, ShoppingCart, ArrowBack,
+    DeleteOutline, Autorenew, PlayArrow, Email, DeleteForever
+} from "@mui/icons-material";
+import QuotationTemplatePicker, { sendComposedQuotation, WhatsAppIcon } from './QuotationTemplatePicker';
+
+/* ── Premium Design Tokens ── */
+const T = {
+    primary: '#2563eb',
+    success: '#059669',
+    error:   '#dc2626',
+    warning: '#d97706',
+    bg:      '#f8fafc',
+    card:    '#ffffff',
+    border:  '#e2e8f0',
+    text:    '#0f172a',
+    textSec: '#64748b',
+    accent:  '#eff6ff',
+};
+
+/** Who the PDF prints under Kind Attention: the enquiry's person, else the customer's primary, else their first. */
+const kindAttentionOf = (enquiry) => {
+    if (enquiry?.contactPersonName?.trim()) {
+        return { name: enquiry.contactPersonName.trim(), phone: enquiry.contactPersonPhone, email: enquiry.contactPersonEmail, from: 'enquiry' };
+    }
+    const people = (enquiry?.contact?.personDetails || []).filter(p => p.personName?.trim());
+    const p = people.find(x => x.isPrimary) || people[0];
+    return p ? { name: p.personName, phone: p.phoneNumber, email: p.emailId, from: 'customer' } : null;
+};
+
+const AddUpdateQuotation = ({ onSave }) => {
+    const parseNum = (val) => parseFloat(val) || 0;
+    // A line's own discount comes off before the quotation's discount, as the server and the PDF do it.
+    const lineTotal = (p) => parseNum(p.qty) * parseNum(p.pricePerUnit) * (1 - parseNum(p.discountPercentage) / 100);
+
+    const [initialData, setInitialData] = useState([]);
+    const navigate = useNavigate();
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const [enquiryList, setEnquiryList] = useState([]);
+    const [productList, setProductList] = useState([]);
+    const { quotationId } = useParams();
+    const { hasAnyRole } = useAuth();
+    const debounceTimeout = useRef(null);
+
+    const formik = useFormik({
+        enableReinitialize: true,
+        initialValues: {
+            id: initialData.id || 0,
+            qtnNo: initialData.qtnNo || null,
+            qtnDate: initialData.qtnDate || new Date().toISOString().split('T')[0],
+            enquiry: {
+                // The whole enquiry, so the customer's currency and the enquiry's contact person reach the form.
+                ...(initialData.enquiry || {}),
+                id: initialData.enquiry?.id || 0,
+                enqNo: initialData.enquiry?.enqNo || null,
+                enqDate: initialData.enquiry?.enqDate || null,
+                contact: {
+                    ...(initialData.enquiry?.contact || {}),
+                    id: initialData.enquiry?.contact?.id || 0,
+                    companyName: initialData.enquiry?.contact?.companyName || '',
+                    gstNumber: initialData.enquiry?.contact?.gstNumber || '',
+                    notes: initialData.enquiry?.contact?.notes || '',
+                    addresses: initialData.enquiry?.contact?.addresses || [],
+                    personDetails: initialData.enquiry?.contact?.personDetails || [],
+                },
+            },
+            currency: initialData.currency || 'INR',
+            exchangeRate: initialData.exchangeRate ?? 1,
+            quotationProducts: initialData.quotationProducts ? initialData.quotationProducts : (initialData.enquiry?.enquiredProducts || []),
+            netAmount: initialData.netAmount ? initialData.netAmount : 0,
+            gstPercentage: initialData.gstPercentage ? initialData.gstPercentage : 0,
+            gstAmount: initialData.gstAmount ? initialData.gstAmount : 0,
+            discountPercentage: initialData.discountPercentage ? initialData.discountPercentage : 0,
+            discountAmount: initialData.discountAmount ? initialData.discountAmount : 0,
+            roundOff: initialData.roundOff ? initialData.roundOff : 0,
+            totalAmount: initialData.totalAmount ? initialData.totalAmount : 0,
+            packagingAndForwardingChargesPercentage: initialData.packagingAndForwardingChargesPercentage ? initialData.packagingAndForwardingChargesPercentage : 0,
+            packagingAndForwardingCharges: initialData.packagingAndForwardingCharges ? initialData.packagingAndForwardingCharges : 0,
+            taxableAmount: initialData.discountAmount ? initialData.packagingAndForwardingCharges + initialData.netAmount - initialData.discountAmount : 0,
+            validTill: initialData.validTill || '',
+            paymentTerms: initialData.paymentTerms || '',
+            deliveryTerms: initialData.deliveryTerms || '',
+            inspectionTerms: initialData.inspectionTerms || '',
+            pricesTerms: initialData.pricesTerms || '',
+            notes: initialData.notes || '',
+            quotationStatus: initialData.quotationStatus || 'DRAFT',
+        },
+        validationSchema: Yup.object({
+            discountPercentage: Yup.number().min(0).max(100),
+            gstPercentage: Yup.number().min(0).max(100),
+            quotationProducts: Yup.array().of(
+                Yup.object().shape({
+                    qty: Yup.number().required().min(0.01),
+                    pricePerUnit: Yup.number().required().min(0),
+                })
+            ),
+        }),
+        onSubmit: (values) => {
+            onSave(values);
+        },
+    });
+
+
+    useEffect(() => {
+        const prods = formik.values.quotationProducts || [];
+        let net = 0;
+        prods.forEach(p => { net += lineTotal(p); });
+
+        const globalDp = parseNum(formik.values.discountPercentage);
+        const discountAmount = +(net * globalDp / 100).toFixed(2);
+        const taxableAmount = +(net - discountAmount).toFixed(2);
+
+        const pafPct = parseNum(formik.values.packagingAndForwardingChargesPercentage);
+        const packagingAndForwardingCharges = +(taxableAmount * pafPct / 100).toFixed(2);
+
+        const gp = parseNum(formik.values.gstPercentage);
+        // Packing & forwarding is part of the supply, so it carries GST — the server computes it this way too.
+        const gstAmount = +((taxableAmount + packagingAndForwardingCharges) * gp / 100).toFixed(2);
+
+        const rawTotal = taxableAmount + gstAmount + packagingAndForwardingCharges;
+        // Rounded to the rupee for a rupee quotation, to the cent in any other currency, as the server does.
+        const total = isRupee(formik.values.currency) ? Math.round(rawTotal) : Math.round(rawTotal * 100) / 100;
+        const roundOff = +(total - rawTotal).toFixed(2);
+
+        if (formik.values.totalAmount !== total) {
+            formik.setFieldValue('netAmount', net.toFixed(2), false);
+            formik.setFieldValue('discountAmount', discountAmount, false);
+            formik.setFieldValue('taxableAmount', taxableAmount, false);
+            formik.setFieldValue('packagingAndForwardingCharges', packagingAndForwardingCharges, false);
+            formik.setFieldValue('gstAmount', gstAmount, false);
+            formik.setFieldValue('totalAmount', total, false);
+            formik.setFieldValue('roundOff', roundOff, false);
+        }
+    }, [
+        formik.values.quotationProducts,
+        formik.values.discountPercentage,
+        formik.values.packagingAndForwardingChargesPercentage,
+        formik.values.gstPercentage,
+        formik.values.currency
+    ]);
+
+    const fetchQuotationDetails = useCallback(async () => {
+        if (!quotationId) return;
+        try {
+            setLoading(true);
+            const data = await apiService.get(`/quotation/${quotationId}`);
+            setInitialData(data);
+        } catch (err) {
+            setError("Failed to fetch Quotation Details");
+        } finally {
+            setLoading(false);
+        }
+    }, [quotationId]);
+
+    useEffect(() => {
+        if (quotationId) fetchQuotationDetails();
+    }, [quotationId, fetchQuotationDetails]);
+
+    // Gross total less the discount, before GST and packing & forwarding are added.
+    const grossTotal = (formik.values.quotationProducts || []).reduce((sum, p) => sum + lineTotal(p), 0);
+    const valueAfterDiscount = +(grossTotal * (1 - parseNum(formik.values.discountPercentage) / 100)).toFixed(2);
+
+    // Lines under the item's minimum selling price once discounts are taken off. The server
+    // refuses these for a sales user; this only says so before Save.
+    const canGoBelowFloor = hasAnyRole(SALES_MANAGE_ROLES);
+    const belowFloorCount = (formik.values.quotationProducts || []).filter(p =>
+        isBelowFloor(floorOf(p.inventoryItem, formik.values.exchangeRate), p.pricePerUnit, p.discountPercentage, formik.values.discountPercentage)
+    ).length;
+
+    // Item prices are in rupees; a line in another currency starts at the item's price at the quotation's rate.
+    const priceFromMaster = (item, rate) =>
+        fromRupees(item?.productFinanceSettings?.sellingPrice || item?.sellingPrice || 0, rate) || 0;
+
+    // Picking a currency brings the rate last entered for it; nothing else on the quotation changes.
+    const changeCurrency = async (code) => {
+        formik.setFieldValue('currency', code);
+        const rate = isRupee(code) ? 1 : await latestRate(code);
+        formik.setFieldValue('exchangeRate', rate ?? '');
+        return rate;
+    };
+
+    const handleEnquiryChange = async (enquiry) => {
+        const response = await apiService.get('/enquiry/' + enquiry.id);
+        formik.setFieldValue("enquiry", response);
+        // The customer's usual terms, only where nothing has been typed yet.
+        if (!formik.values.paymentTerms && response.contact?.defaultPaymentTerms) {
+            formik.setFieldValue("paymentTerms", response.contact.defaultPaymentTerms);
+        }
+        // A new quotation still on the rupee default is raised in the customer's own currency.
+        let rate = formik.values.exchangeRate;
+        if (!quotationId && response.contact?.currency && formik.values.currency === 'INR') {
+            rate = await changeCurrency(response.contact.currency);
+        }
+        if (!quotationId && (!formik.values.quotationProducts || formik.values.quotationProducts.length === 0)) {
+            const mappedProds = (response.enquiredProducts || []).map(ep => ({
+                ...ep,
+                pricePerUnit: priceFromMaster(ep.inventoryItem, rate)
+            }));
+            formik.setFieldValue("quotationProducts", mappedProds);
+        }
+    };
+
+    const handleSearchChange = async (event, value) => {
+        if (!value || value.length < 2) return;
+        if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
+        debounceTimeout.current = setTimeout(async () => {
+            try {
+                const data = await searchEnquiry(value);
+                setEnquiryList(data);
+            } catch (err) { console.error(err); }
+        }, 500);
+    };
+
+    const handleSearchChangeProduct = async (event, value, index) => {
+        if (!value || value.length < 2) return;
+        if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
+        debounceTimeout.current = setTimeout(async () => {
+            try {
+                const data = await inventoryItemSearch(value);
+                setProductList(data);
+            } catch (err) { console.error(err); }
+        }, 500);
+    };
+
+    const addProduct = () => {
+        const updated = [...formik.values.quotationProducts, { 
+            inventoryItem: null, productNameRequired: "", pricePerUnit: 0, qty: 1, discountPercentage: 0, specialInstruction: "" 
+        }];
+        formik.setFieldValue("quotationProducts", updated);
+    };
+
+    const removeProduct = (index) => {
+        const updatedProducts = [...formik.values.quotationProducts];
+        updatedProducts.splice(index, 1);
+        formik.setFieldValue("quotationProducts", updatedProducts);
+    };
+
+    const printDocument = async () => {
+        await apiService.download(`/quotation/pdf/${quotationId}`);
+    };
+
+    // The same actions the quotation list offers on a row, here on the quotation itself.
+    // They act on the saved quotation, as the PDF does: save first to send what is on screen.
+    const [templatePicker, setTemplatePicker] = useState({ open: false, channel: 'EMAIL' });
+    const status = formik.values.quotationStatus;
+    const attentionForSend = kindAttentionOf(formik.values.enquiry);
+    const pickerQuotation = {
+        id: quotationId,
+        qtnNo: formik.values.qtnNo,
+        qtnDate: formik.values.qtnDate,
+        currency: formik.values.currency,
+        totalAmount: formik.values.totalAmount,
+        companyName: formik.values.enquiry?.contact?.companyName || formik.values.enquiry?.manualCompanyName,
+        contactPerson: attentionForSend?.name,
+        // The list sends to the customer's own phone and email; the contact person's are the fallback.
+        phone: formik.values.enquiry?.contact?.phone || attentionForSend?.phone,
+        email: formik.values.enquiry?.contact?.email || attentionForSend?.email,
+    };
+
+    const handleRevise = async () => {
+        if (!window.confirm('Are you sure you want to revise this quotation? This will create a new draft and mark the current one as REVISED.')) return;
+        try {
+            const revised = await apiService.post(`/quotation/${quotationId}/revise`);
+            navigate(`/quotation/edit/${revised.id}`);
+        } catch (err) {
+            setError('Failed to revise quotation: ' + (err?.response?.data?.message || err.message));
+        }
+    };
+
+    const handleDelete = async () => {
+        if (!window.confirm('Are you sure you want to delete this quotation?')) return;
+        try {
+            await apiService.delete(`/quotation/${quotationId}`);
+            navigate('/quotation');
+        } catch (err) {
+            setError('Failed to delete quotation.');
+        }
+    };
+
+    if (loading) return (
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '80vh' }}>
+            <CircularProgress size={48} thickness={4} />
+        </Box>
+    );
+
+    return (
+        <Box sx={{ bgcolor: T.bg, minHeight: '100vh', pb: 10 }}>
+            <form onSubmit={formik.handleSubmit}>
+                {/* ── Hero Header ── */}
+                <Box sx={{ 
+                    bgcolor: '#0f172a', 
+                    backgroundImage: 'radial-gradient(circle at 20% 50%, rgba(37, 99, 235, 0.15) 0%, transparent 50%), radial-gradient(circle at 80% 80%, rgba(5, 150, 105, 0.05) 0%, transparent 50%)',
+                    color: 'white', pt: 6, pb: 14 
+                }}>
+                    <Container maxWidth="xl">
+                        <Stack direction="row" justifyContent="space-between" alignItems="center">
+                            <Stack direction="row" spacing={3} alignItems="center">
+                                <IconButton onClick={() => navigate(-1)} sx={{ color: 'white', border: '1px solid rgba(255,255,255,0.1)', '&:hover': { bgcolor: 'rgba(255,255,255,0.05)' } }}>
+                                    <ArrowBack />
+                                </IconButton>
+                                <Box>
+                                    <Typography variant="h4" sx={{ fontWeight: 900, letterSpacing: '-0.02em' }}>
+                                        {quotationId ? `Quotation: #${formik.values.qtnNo || '...'}` : 'New Quotation'}
+                                    </Typography>
+                                    <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mt: 1 }}>
+                                        <Chip label={formik.values.quotationStatus} size="small" 
+                                            sx={{ fontWeight: 900, bgcolor: 'rgba(255,255,255,0.1)', color: 'white', border: '1px solid rgba(255,255,255,0.2)', height: 24 }} />
+                                        <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.5)', fontWeight: 600 }}>
+                                            {formik.values.enquiry?.contact?.companyName || 'Drafting Proposal'}
+                                        </Typography>
+                                    </Stack>
+                                </Box>
+                            </Stack>
+
+                            <Stack direction="row" spacing={2} alignItems="center">
+                                {quotationId && (
+                                    <Button 
+                                        variant="outlined" startIcon={<Description />} 
+                                        sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.2)', borderRadius: 2.5, textTransform: 'none', fontWeight: 700, px: 3 }} 
+                                        onClick={printDocument}
+                                    >
+                                        Download PDF
+                                    </Button>
+                                )}
+                                <Button
+                                    type="submit" variant="contained" disableElevation startIcon={<Save />}
+                                    sx={{ bgcolor: T.primary, borderRadius: 2.5, px: 4, py: 1.2, textTransform: 'none', fontWeight: 800, fontSize: '1rem', '&:hover': { bgcolor: '#1d4ed8' } }}
+                                >
+                                    Save Quotation
+                                </Button>
+                            </Stack>
+                        </Stack>
+                    </Container>
+                </Box>
+
+                <Container maxWidth="xl" sx={{ mt: -8 }}>
+                    {error && <Alert severity="error" sx={{ mb: 4, borderRadius: 4, fontWeight: 700 }}>{error}</Alert>}
+
+                    <Grid container spacing={4}>
+                        <Grid item xs={12} lg={8.5}>
+                            <Stack spacing={4}>
+                                {/* Actions, as on the quotation list */}
+                                {quotationId && (
+                                    <Paper elevation={0} sx={{ p: 1.5, borderRadius: 4, border: `1px solid ${T.border}`, bgcolor: 'white', boxShadow: '0 10px 40px rgba(0,0,0,0.04)' }}>
+                                        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                                            <Tooltip title={pickerQuotation.email ? '' : 'The customer has no email address'}>
+                                                <span>
+                                                    <Button size="small" variant="contained" disableElevation startIcon={<Email />} disabled={!pickerQuotation.email}
+                                                        sx={{ borderRadius: 2.5, fontWeight: 800, textTransform: 'none', bgcolor: '#0891b2' }}
+                                                        onClick={() => setTemplatePicker({ open: true, channel: 'EMAIL' })}>
+                                                        Send via Email
+                                                    </Button>
+                                                </span>
+                                            </Tooltip>
+                                            <Tooltip title={pickerQuotation.phone ? '' : 'The customer has no phone number'}>
+                                                <span>
+                                                    <Button size="small" variant="outlined" startIcon={<WhatsAppIcon />} disabled={!pickerQuotation.phone}
+                                                        sx={{ borderRadius: 2.5, fontWeight: 800, textTransform: 'none', color: '#16a34a', borderColor: '#16a34a' }}
+                                                        onClick={() => setTemplatePicker({ open: true, channel: 'WHATSAPP' })}>
+                                                        Send via WhatsApp
+                                                    </Button>
+                                                </span>
+                                            </Tooltip>
+                                            {(status === 'SENT' || status === 'REJECTED') && (
+                                                <Button size="small" variant="outlined" startIcon={<Autorenew />}
+                                                    sx={{ borderRadius: 2.5, fontWeight: 800, textTransform: 'none', color: T.warning, borderColor: T.warning }}
+                                                    onClick={handleRevise}>
+                                                    Revise Quotation
+                                                </Button>
+                                            )}
+                                            {(status === 'ACCEPTED' || status === 'SENT') && (
+                                                <Button size="small" variant="outlined" startIcon={<PlayArrow />}
+                                                    sx={{ borderRadius: 2.5, fontWeight: 800, textTransform: 'none', color: T.success, borderColor: T.success }}
+                                                    onClick={() => navigate('/sales/sales-order/add', { state: { prefillQuotationId: quotationId } })}>
+                                                    Convert to Sales Order
+                                                </Button>
+                                            )}
+                                            <Box sx={{ flexGrow: 1 }} />
+                                            <Button size="small" color="error" startIcon={<DeleteForever />}
+                                                sx={{ borderRadius: 2.5, fontWeight: 800, textTransform: 'none' }}
+                                                onClick={handleDelete}>
+                                                Delete Quotation
+                                            </Button>
+                                        </Stack>
+                                    </Paper>
+                                )}
+
+                                {/* Document Settings */}
+                                <Paper elevation={0} sx={{ p: 5, borderRadius: 5, border: `1px solid ${T.border}`, bgcolor: 'white', boxShadow: '0 20px 60px rgba(0,0,0,0.06)' }}>
+                                    <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 4 }}>
+                                        <Avatar sx={{ bgcolor: T.accent, color: T.primary, width: 40, height: 40, borderRadius: 2 }}>
+                                            <Info sx={{ fontSize: 20 }} />
+                                        </Avatar>
+                                        <Typography variant="h6" sx={{ fontWeight: 900, color: T.text }}>Quotation Metadata</Typography>
+                                    </Stack>
+                                    <Grid container spacing={3}>
+                                        <Grid item xs={12} md={4}>
+                                            <TextField select fullWidth label="Quotation Status" name="quotationStatus" value={formik.values.quotationStatus} onChange={formik.handleChange} 
+                                                sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }}>
+                                                {['DRAFT', 'SENT', 'ACCEPTED', 'REJECTED', 'REVISED'].map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
+                                            </TextField>
+                                        </Grid>
+                                        <Grid item xs={12} md={4}>
+                                            <TextField fullWidth type="date" label="Date of Issue" name="qtnDate" value={formik.values.qtnDate} onChange={formik.handleChange} 
+                                                InputLabelProps={{ shrink: true }} sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }} />
+                                        </Grid>
+                                        <Grid item xs={12} md={4}>
+                                            <CurrencySelect value={formik.values.currency} onChange={changeCurrency}
+                                                sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }} />
+                                        </Grid>
+                                        {!isRupee(formik.values.currency) && (
+                                            <Grid item xs={12} md={4}>
+                                                <ExchangeRateField currency={formik.values.currency} value={formik.values.exchangeRate}
+                                                    onChange={v => formik.setFieldValue('exchangeRate', v)}
+                                                    sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }} />
+                                            </Grid>
+                                        )}
+                                    </Grid>
+                                </Paper>
+
+                                {/* Customer Selection */}
+                                <Paper elevation={0} sx={{ p: 5, borderRadius: 5, border: `1px solid ${T.border}`, bgcolor: 'white', boxShadow: '0 20px 60px rgba(0,0,0,0.06)' }}>
+                                    <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 4 }}>
+                                        <Avatar sx={{ bgcolor: '#ecfdf5', color: T.success, width: 40, height: 40, borderRadius: 2 }}>
+                                            <Receipt sx={{ fontSize: 20 }} />
+                                        </Avatar>
+                                        <Typography variant="h6" sx={{ fontWeight: 900, color: T.text }}>Client Reference</Typography>
+                                    </Stack>
+                                    <Grid container spacing={4}>
+                                        <Grid item xs={12} md={7}>
+                                            <Autocomplete
+                                                fullWidth options={enquiryList}
+                                                getOptionLabel={(option) => option?.enqNo ? `${option.enqNo} - ${option.contact?.companyName || ''}` : ''}
+                                                value={formik.values.enquiry || null}
+                                                onInputChange={handleSearchChange}
+                                                onChange={(event, newValue) => {
+                                                    formik.setFieldValue('enquiry', newValue || null);
+                                                    if (newValue) handleEnquiryChange(newValue);
+                                                }}
+                                                renderInput={(params) => <TextField {...params} label="Search Enquiry / Client" placeholder="Start typing enquiry number..." 
+                                                    sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }} />}
+                                            />
+                                        </Grid>
+                                        <Grid item xs={12} md={5}>
+                                            <Box sx={{ p: 3, borderRadius: 4, bgcolor: T.bg, border: `1px solid ${T.border}`, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                                                {(formik.values.enquiry?.contact?.companyName || formik.values.enquiry?.manualCompanyName) ? (() => {
+                                                    const attention = kindAttentionOf(formik.values.enquiry);
+                                                    return (
+                                                    <>
+                                                        <Typography variant="caption" sx={{ color: T.textSec, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Linked Company</Typography>
+                                                        <Typography variant="h6" sx={{ fontWeight: 900, color: T.text, mt: 0.5 }}>{formik.values.enquiry.contact?.companyName || formik.values.enquiry.manualCompanyName}</Typography>
+                                                        <Typography variant="body2" sx={{ color: T.textSec, mt: 1, fontWeight: 500 }}>GSTIN: {formik.values.enquiry.contact?.gstNumber || 'N/A'}</Typography>
+                                                        {/* Printed under Kind Attention on the PDF. */}
+                                                        <Typography variant="body2" sx={{ color: attention ? T.text : T.warning, mt: 1, fontWeight: 600 }}>
+                                                            Kind Attention: {attention
+                                                                ? [attention.name, attention.phone, attention.email].filter(Boolean).join(' · ')
+                                                                : 'nobody: add a contact person on the enquiry or the customer'}
+                                                        </Typography>
+                                                        {(() => {
+                                                            // A quotation made before the customer's currency was set, or typed in another one.
+                                                            const theirs = formik.values.enquiry?.contact?.currency;
+                                                            if (!theirs || theirs === (formik.values.currency || 'INR')) return null;
+                                                            return (
+                                                                <Alert severity="warning" sx={{ mt: 1.5, borderRadius: 2, py: 0 }}
+                                                                    action={<Button size="small" color="inherit" onClick={() => changeCurrency(theirs)}>Use {theirs}</Button>}>
+                                                                    Customer is billed in {theirs}; this quotation is in {formik.values.currency || 'INR'}.
+                                                                </Alert>
+                                                            );
+                                                        })()}
+                                                    </>
+                                                    );
+                                                })() : (
+                                                    <Typography sx={{ color: T.textSec, fontStyle: 'italic', textAlign: 'center', fontWeight: 600 }}>Select an enquiry to load client details</Typography>
+                                                )}
+                                            </Box>
+                                        </Grid>
+                                    </Grid>
+                                </Paper>
+
+                                {/* Line Items */}
+                                <Paper elevation={0} sx={{ p: 0, borderRadius: 5, border: `1px solid ${T.border}`, bgcolor: 'white', overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.06)' }}>
+                                    <Box sx={{ p: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${T.border}` }}>
+                                        <Stack direction="row" spacing={1.5} alignItems="center">
+                                            <Avatar sx={{ bgcolor: '#fffbeb', color: T.warning, width: 40, height: 40, borderRadius: 2 }}>
+                                                <ShoppingCart sx={{ fontSize: 20 }} />
+                                            </Avatar>
+                                            <Typography variant="h6" sx={{ fontWeight: 900, color: T.text }}>Quoted Line Items</Typography>
+                                        </Stack>
+                                        <Button variant="contained" size="small" startIcon={<Add />} onClick={addProduct} sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 800, bgcolor: T.text, '&:hover': { bgcolor: '#000' } }}>
+                                            Add Item
+                                        </Button>
+                                    </Box>
+                                    {belowFloorCount > 0 && (
+                                        <Alert severity={canGoBelowFloor ? 'warning' : 'error'} sx={{ m: 3, mb: 0, borderRadius: 3, fontWeight: 600 }}>
+                                            {belowFloorCount} line{belowFloorCount > 1 ? 's are' : ' is'} priced below the minimum selling price after discounts.
+                                            {canGoBelowFloor ? '' : ' Only a sales admin can take a price below the minimum.'}
+                                        </Alert>
+                                    )}
+                                    <TableContainer>
+                                        <Table sx={{ minWidth: 800 }}>
+                                            <TableHead sx={{ bgcolor: T.bg }}>
+                                                <TableRow>
+                                                    <TableCell sx={{ fontWeight: 900, color: T.textSec, fontSize: '0.75rem', textTransform: 'uppercase', py: 2 }}>#</TableCell>
+                                                    <TableCell sx={{ fontWeight: 900, color: T.textSec, fontSize: '0.75rem', textTransform: 'uppercase', py: 2 }}>Product Details</TableCell>
+                                                    <TableCell align="center" sx={{ fontWeight: 900, color: T.textSec, fontSize: '0.75rem', textTransform: 'uppercase', py: 2 }}>Quantity</TableCell>
+                                                    <TableCell align="right" sx={{ fontWeight: 900, color: T.textSec, fontSize: '0.75rem', textTransform: 'uppercase', py: 2 }}>Unit Price</TableCell>
+                                                    <TableCell align="center" sx={{ fontWeight: 900, color: T.textSec, fontSize: '0.75rem', textTransform: 'uppercase', py: 2 }}>Disc %</TableCell>
+                                                    <TableCell align="right" sx={{ fontWeight: 900, color: T.textSec, fontSize: '0.75rem', textTransform: 'uppercase', py: 2 }}>Total</TableCell>
+                                                    <TableCell align="center" sx={{ py: 2 }}></TableCell>
+                                                </TableRow>
+                                            </TableHead>
+                                            <TableBody>
+                                                {formik.values.quotationProducts?.map((product, index) => (
+                                                    <TableRow key={index} sx={{ '&:hover': { bgcolor: `${T.primary}04` } }}>
+                                                        <TableCell sx={{ fontWeight: 800, color: T.textSec }}>{index + 1}</TableCell>
+                                                        <TableCell sx={{ py: 3, maxWidth: 300 }}>
+                                                            <Autocomplete
+                                                                fullWidth size="small" options={productList} filterOptions={serverFiltered} renderOption={renderItemOption}
+                                                                getOptionLabel={(option) => option.name || option.productNameRequired || ''}
+                                                                value={product.inventoryItem || null}
+                                                                onInputChange={(event, newInputValue) => handleSearchChangeProduct(event, newInputValue, index)}
+                                                                onChange={(event, newValue) => {
+                                                                    const updatedProducts = [...formik.values.quotationProducts];
+                                                                    updatedProducts[index] = {
+                                                                        ...updatedProducts[index],
+                                                                        inventoryItem: newValue,
+                                                                        productNameRequired: newValue?.name || '',
+                                                                        pricePerUnit: priceFromMaster(newValue, formik.values.exchangeRate),
+                                                                    };
+                                                                    formik.setFieldValue('quotationProducts', updatedProducts);
+                                                                }}
+                                                                renderInput={(params) => <TextField {...params} variant="standard" placeholder="Select product..." sx={{ '& input': { fontWeight: 800, color: T.text } }} />}
+                                                            />
+                                                            <TextField
+                                                                fullWidth size="small" variant="standard" placeholder="Specific requirements or model notes..."
+                                                                name={`quotationProducts[${index}].specialInstruction`}
+                                                                value={product.specialInstruction || ""}
+                                                                onChange={formik.handleChange}
+                                                                sx={{ mt: 1, '& input': { fontSize: '0.8rem', color: T.textSec, fontWeight: 500 } }}
+                                                            />
+                                                        </TableCell>
+                                                        <TableCell align="center">
+                                                            <TextField size="small" type="number" name={`quotationProducts[${index}].qty`} value={product.qty || 0} onChange={formik.handleChange} 
+                                                                sx={{ width: 80, '& input': { textAlign: 'center', fontWeight: 800, borderRadius: 2, bgcolor: T.bg } }} variant="outlined" />
+                                                        </TableCell>
+                                                        <TableCell align="right">
+                                                            <TextField size="small" type="number" name={`quotationProducts[${index}].pricePerUnit`} value={product.pricePerUnit || 0} onChange={formik.handleChange} 
+                                                                sx={{ width: 120, '& input': { textAlign: 'right', fontWeight: 800, borderRadius: 2, bgcolor: T.bg } }} variant="outlined" />
+                                                            <PriceFloorHint item={product.inventoryItem} price={product.pricePerUnit} currency={formik.values.currency} rate={formik.values.exchangeRate}
+                                                                lineDiscountPct={product.discountPercentage} documentDiscountPct={formik.values.discountPercentage} />
+                                                        </TableCell>
+                                                        <TableCell align="center">
+                                                            <TextField size="small" type="number" name={`quotationProducts[${index}].discountPercentage`} value={product.discountPercentage || 0} onChange={formik.handleChange}
+                                                                inputProps={{ min: 0, max: 100 }}
+                                                                sx={{ width: 70, '& input': { textAlign: 'center', fontWeight: 800, borderRadius: 2, bgcolor: T.bg } }} variant="outlined" />
+                                                        </TableCell>
+                                                        <TableCell align="right">
+                                                            <Typography sx={{ fontWeight: 900, color: T.primary }}>
+                                                                {formatMoney(lineTotal(product), formik.values.currency)}
+                                                            </Typography>
+                                                        </TableCell>
+                                                        <TableCell align="center">
+                                                            <IconButton size="small" onClick={() => removeProduct(index)} sx={{ color: T.error, opacity: 0.5, '&:hover': { opacity: 1, bgcolor: '#fef2f2' } }}>
+                                                                <DeleteOutline fontSize="small" />
+                                                            </IconButton>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                ))}
+                                            </TableBody>
+                                        </Table>
+                                    </TableContainer>
+                                </Paper>
+                            </Stack>
+                        </Grid>
+
+                        <Grid item xs={12} lg={3.5}>
+                            <Stack spacing={4} sx={{ position: 'sticky', top: 40 }}>
+                                {/* Summary Card */}
+                                <Paper elevation={0} sx={{ p: 4, borderRadius: 5, border: `1px solid ${T.border}`, bgcolor: 'white', boxShadow: '0 20px 60px rgba(0,0,0,0.06)' }}>
+                                    <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 4 }}>
+                                        <Avatar sx={{ bgcolor: T.accent, color: T.primary, width: 40, height: 40, borderRadius: 2 }}>
+                                            <AttachMoney sx={{ fontSize: 20 }} />
+                                        </Avatar>
+                                        <Typography variant="h6" sx={{ fontWeight: 900, color: T.text }}>Quote Summary</Typography>
+                                    </Stack>
+
+                                    <Stack spacing={2.5}>
+                                        <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                                            <Typography variant="body2" sx={{ color: T.textSec, fontWeight: 700 }}>Gross Total</Typography>
+                                            <Typography variant="body2" sx={{ fontWeight: 900, color: T.text }}>{formatMoney(formik.values.netAmount, formik.values.currency)}</Typography>
+                                        </Box>
+                                        
+                                        <Box sx={{ p: 2, borderRadius: 4, bgcolor: T.bg, border: `1px solid ${T.border}` }}>
+                                            <Stack spacing={2}>
+                                                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                    <Typography variant="caption" sx={{ color: T.textSec, fontWeight: 900 }}>Discount (%)</Typography>
+                                                    <TextField size="small" name="discountPercentage" value={formik.values.discountPercentage} onChange={formik.handleChange} 
+                                                        sx={{ width: 60, '& input': { py: 0.5, textAlign: 'center', fontWeight: 900, bgcolor: 'white', borderRadius: 1 } }} />
+                                                </Box>
+                                                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                    <Typography variant="caption" sx={{ color: T.textSec, fontWeight: 900 }}>Total Value</Typography>
+                                                    <Typography variant="body2" sx={{ fontWeight: 900, color: T.text }}>{formatMoney(valueAfterDiscount, formik.values.currency)}</Typography>
+                                                </Box>
+                                                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                    <Typography variant="caption" sx={{ color: T.textSec, fontWeight: 900 }}>GST (%)</Typography>
+                                                    <TextField size="small" name="gstPercentage" value={formik.values.gstPercentage} onChange={formik.handleChange} 
+                                                        sx={{ width: 60, '& input': { py: 0.5, textAlign: 'center', fontWeight: 900, bgcolor: 'white', borderRadius: 1 } }} />
+                                                </Box>
+                                                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                    <Typography variant="caption" sx={{ color: T.textSec, fontWeight: 900 }}>P&F Chgs (%)</Typography>
+                                                    <TextField size="small" name="packagingAndForwardingChargesPercentage" value={formik.values.packagingAndForwardingChargesPercentage} onChange={formik.handleChange} 
+                                                        sx={{ width: 60, '& input': { py: 0.5, textAlign: 'center', fontWeight: 900, bgcolor: 'white', borderRadius: 1 } }} />
+                                                </Box>
+                                            </Stack>
+                                        </Box>
+
+                                        <Divider sx={{ my: 1 }} />
+
+                                        <Box sx={{ p: 3, borderRadius: 4, bgcolor: T.primary, color: 'white', boxShadow: '0 10px 20px -5px rgba(37, 99, 235, 0.4)' }}>
+                                            <Typography variant="caption" sx={{ fontWeight: 800, opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Total Payable</Typography>
+                                            <Typography variant="h4" sx={{ fontWeight: 950, mt: 0.5 }}>
+                                                {formatMoney(formik.values.totalAmount, formik.values.currency, { decimals: isRupee(formik.values.currency) ? 0 : 2 })}
+                                            </Typography>
+                                            {formik.values.roundOff !== 0 && (
+                                                <Typography variant="caption" sx={{ display: 'block', mt: 1, opacity: 0.7, fontWeight: 700 }}>Adj: {formik.values.roundOff}</Typography>
+                                            )}
+                                        </Box>
+                                    </Stack>
+                                </Paper>
+
+                                {/* Additional Terms */}
+                                <Paper elevation={0} sx={{ p: 4, borderRadius: 5, border: `1px solid ${T.border}`, bgcolor: 'white', boxShadow: '0 20px 60px rgba(0,0,0,0.06)' }}>
+                                    <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 3 }}>
+                                        <Avatar sx={{ bgcolor: '#f5f3ff', color: '#7c3aed', width: 40, height: 40, borderRadius: 2 }}>
+                                            <Note sx={{ fontSize: 20 }} />
+                                        </Avatar>
+                                        <Typography variant="h6" sx={{ fontWeight: 900, color: T.text }}>Terms & Notes</Typography>
+                                    </Stack>
+                                    <Stack spacing={3}>
+                                        <TextField fullWidth label="Validity Period" name="validTill" value={formik.values.validTill} onChange={formik.handleChange} 
+                                            placeholder="e.g. 15 Days" sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }} />
+                                        <TextField fullWidth label="Payment Terms" name="paymentTerms" value={formik.values.paymentTerms} onChange={formik.handleChange} 
+                                            placeholder="e.g. 50% Advance" sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }} />
+                                        {/* Printed in the PDF's terms block; prices basis becomes the sales order's incoterms. */}
+                                        <TextField fullWidth label="Prices / Price Basis" name="pricesTerms" value={formik.values.pricesTerms} onChange={formik.handleChange}
+                                            placeholder="e.g. Ex-works Rajkot, GST extra" sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }} />
+                                        <TextField fullWidth label="Delivery" name="deliveryTerms" value={formik.values.deliveryTerms} onChange={formik.handleChange}
+                                            placeholder="e.g. 4-6 weeks from PO" sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }} />
+                                        <TextField fullWidth label="Inspection" name="inspectionTerms" value={formik.values.inspectionTerms} onChange={formik.handleChange}
+                                            placeholder="e.g. At our works, before dispatch" sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }} />
+                                        <TextField fullWidth multiline rows={4} label="Client Notes" name="notes" value={formik.values.notes} onChange={formik.handleChange} 
+                                            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }} />
+                                    </Stack>
+                                </Paper>
+                            </Stack>
+                        </Grid>
+                    </Grid>
+                </Container>
+            <QuotationTemplatePicker
+                open={templatePicker.open}
+                onClose={() => setTemplatePicker(p => ({ ...p, open: false }))}
+                channel={templatePicker.channel}
+                quotation={pickerQuotation}
+                onSend={(text, subject, mail) => sendComposedQuotation(templatePicker.channel, pickerQuotation, text, subject, mail)}
+            />
+            </form>
+        </Box>
+    );
+};
+
+export default AddUpdateQuotation;

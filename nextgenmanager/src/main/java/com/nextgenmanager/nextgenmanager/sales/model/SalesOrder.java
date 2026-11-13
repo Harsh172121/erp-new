@@ -1,0 +1,180 @@
+package com.nextgenmanager.nextgenmanager.sales.model;
+
+
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonManagedReference;
+import com.nextgenmanager.nextgenmanager.Inventory.model.Warehouse;
+import com.nextgenmanager.nextgenmanager.contact.model.Contact;
+import com.nextgenmanager.nextgenmanager.marketing.enquiry.model.Enquiry;
+import com.nextgenmanager.nextgenmanager.marketing.quotation.model.Quotation;
+import jakarta.persistence.*;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+@Entity
+@Getter @Setter
+@NoArgsConstructor @AllArgsConstructor
+@Table(name = "salesOrder")
+
+public class SalesOrder {
+
+    @Id @GeneratedValue(strategy = GenerationType.AUTO)
+    private Long id;
+
+    // — Voucher identification —
+    @Column(unique = true, nullable = false)
+    private String orderNumber;                     // e.g. “SO/2025/0001”
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private VoucherType voucherType = VoucherType.SALES_ORDER;
+
+    // — Party & Reference —
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "customer_id", nullable = false)
+    private Contact customer;
+
+    @Column(nullable = false)
+    private LocalDate orderDate;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "quotation_id")
+    private Quotation quotation;
+
+    /**
+     * The enquiry this order ultimately came from.
+     *
+     * Normally derived from {@link #quotation} — enquiry to quotation to order is the intended
+     * chain. It is held directly as well because plenty of real orders never pass through a
+     * quotation: PEC's 2026 register books orders taken over the phone, over WhatsApp and by
+     * mail against enquiries that were never formally quoted. Reaching those only through the
+     * quotation would leave the enquiry that produced the revenue unable to prove it, and
+     * "which enquiries actually turned into money?" is the question the register exists to answer.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "enquiry_id")
+    private Enquiry enquiry;
+
+    // — Line items —
+    @OneToMany(mappedBy = "salesOrder", cascade = CascadeType.ALL, orphanRemoval = true)
+    @JsonManagedReference
+    private List<SalesOrderItem> items = new ArrayList<>();
+
+    // — Commercial summary —
+    @Column(precision = 12, scale = 2) private BigDecimal subTotal;       // sum of line taxable values
+    @Column(precision = 12, scale = 2) private BigDecimal discountAmount;
+
+    private boolean includeFreightCharges;
+    @Column(precision = 12, scale = 2)
+    private BigDecimal freightAndForwardingCharges = BigDecimal.ZERO;
+
+    @Column(precision = 12, scale = 2)
+    private BigDecimal discountPercentage;
+
+    @Enumerated(EnumType.STRING)
+    private TaxType taxType = TaxType.CGST_SGST;
+
+    @Column(precision = 5, scale = 2)
+    private BigDecimal taxPercentage;
+
+    @Column(precision = 12, scale = 2) private BigDecimal taxableValue;   // subTotal – discount
+    @Column(precision = 12, scale = 2) private BigDecimal cgstAmount;
+    @Column(precision = 12, scale = 2) private BigDecimal sgstAmount;
+    @Column(precision = 12, scale = 2) private BigDecimal igstAmount;
+    @Column(precision = 12, scale = 2) private BigDecimal cessAmount;
+    @Column(precision = 12, scale = 2) private BigDecimal roundOffAmount;
+    @Column(precision = 12, scale = 2) private BigDecimal netAmount;
+    @Column(precision = 12, scale = 2) private BigDecimal totalPayableAmount;
+
+    @Column(length = 200) private String paymentTerms;                    // e.g. “30% advance, balance on delivery”
+    @Column(length = 200) private String incoterms;                      // e.g. “FOB, Indian Port”
+    @Column(length = 20)  private String currency;                       // e.g. “INR”
+    /** Rupees per one unit of {@link #currency}; exactly 1 for a rupee order (ExchangeRates.normalise). */
+    @Column(precision = 18, scale = 6, nullable = false) private BigDecimal exchangeRate = BigDecimal.ONE;
+
+    // — Bill to / ship to —
+    // All optional. Read them through SalesParties, which fills the blanks: no billToAddress means
+    // the customer's billing address, no deliveryAddress means ship to the bill-to address, and no
+    // shipToName means the consignee is the customer.
+    @Column(length = 500) private String billToAddress;
+    @Column(length = 500) private String deliveryAddress;                // the ship-to address
+    @Column(length = 255) private String shipToName;                     // consignee, when not the customer
+    @Column(length = 15)  private String shipToGstin;
+    @Column(length = 2)   private String shipToStateCode;                // e.g. "27"
+
+    // — Logistics —
+    @Column(length = 100) private String dispatchThrough;                // e.g. “By Road”
+    @Column(length = 50)  private String transportMode;                  // e.g. “Truck”
+    @Column(length = 50)  private String ewayBillNumber;
+    private LocalDate deliveryDate;
+
+    /**
+     * The warehouse this order is dispatched from. Anything the order turns out to be short of is
+     * wanted there, so the work order or requisition raised for it is addressed to this warehouse,
+     * and the pick list is drawn from it. Null means the default warehouse.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "dispatchWarehouseId")
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
+    private Warehouse dispatchWarehouse;
+
+    @Column(length = 200) private String packagingInstructions;
+    @Column(length = 100) private String shippingMethod;
+
+    // — References —
+    @Column(length = 50)  private String poNumber;
+    private LocalDate poDate;
+    @Column(length = 200) private String reference;                      // any other ref
+    @Column(length = 200) private String remarks;
+
+    @Column(length = 100) private String placeOfSupply;                  // e.g. "Maharashtra"
+    @Column(length = 5)   private String placeOfSupplyStateCode;          // e.g. "27"
+
+    // — Status & audit —
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private SalesOrderStatus status = SalesOrderStatus.DRAFT;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private SalesOrderApprovalStatus approvalStatus = SalesOrderApprovalStatus.DRAFT;
+
+    private String approvedBy;
+    private Date approvedDate;
+    @Column(length = 500)
+    private String rejectionReason;
+    private Date sentToCustomerAt;
+    @Column(length = 200)
+    private String sentToCustomerEmail;
+    private Integer revisionNo = 0;
+    private Long parentSoId;
+
+    @OneToMany(mappedBy = "salesOrder", cascade = CascadeType.ALL)
+    private List<DeliveryNote> deliveryNotes;
+
+
+    @OneToMany(mappedBy = "salesOrder", cascade = CascadeType.ALL)
+    private List<TaxInvoice> taxInvoices;
+
+    @OneToMany(mappedBy = "salesOrder", cascade = CascadeType.ALL, orphanRemoval = true)
+    @JsonManagedReference
+    private List<SalesPayment> payments = new ArrayList<>();
+
+    @CreationTimestamp
+    @Column(updatable = false)
+    private Date creationDate;
+
+    @UpdateTimestamp
+    private Date updatedDate;
+
+    private Date deletedDate;
+}

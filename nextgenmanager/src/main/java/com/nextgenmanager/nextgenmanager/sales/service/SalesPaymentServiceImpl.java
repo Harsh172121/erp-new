@@ -1,0 +1,115 @@
+package com.nextgenmanager.nextgenmanager.sales.service;
+
+import com.nextgenmanager.nextgenmanager.bom.service.ResourceNotFoundException;
+import com.nextgenmanager.nextgenmanager.common.audit.AuditActions;
+import com.nextgenmanager.nextgenmanager.common.audit.AuditEvent;
+import com.nextgenmanager.nextgenmanager.common.audit.service.AuditTrailService;
+import com.nextgenmanager.nextgenmanager.common.events.DomainEventPublisher;
+import com.nextgenmanager.nextgenmanager.common.events.DocumentVoidedEvent;
+import com.nextgenmanager.nextgenmanager.common.events.SourceDocTypes;
+import com.nextgenmanager.nextgenmanager.sales.events.SalesPaymentReceivedEvent;
+import com.nextgenmanager.nextgenmanager.sales.dto.SalesPaymentCreateDto;
+import com.nextgenmanager.nextgenmanager.sales.dto.SalesPaymentDto;
+import com.nextgenmanager.nextgenmanager.sales.model.SalesOrder;
+import com.nextgenmanager.nextgenmanager.sales.model.SalesPayment;
+import com.nextgenmanager.nextgenmanager.sales.repository.SalesOrderRepository;
+import com.nextgenmanager.nextgenmanager.sales.repository.SalesPaymentRepository;
+import jakarta.transaction.Transactional;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+
+import java.math.BigDecimal;
+import java.util.List;
+
+@Service
+@RequiredArgsConstructor
+@Transactional
+public class SalesPaymentServiceImpl implements SalesPaymentService {
+
+    private final SalesPaymentRepository paymentRepository;
+    private final SalesOrderRepository salesOrderRepository;
+    private final DomainEventPublisher domainEventPublisher;
+    private final AuditTrailService auditTrail;
+
+    @Override
+    public SalesPaymentDto recordPayment(Long salesOrderId, SalesPaymentCreateDto dto) {
+        SalesOrder order = salesOrderRepository.findById(salesOrderId)
+                .orElseThrow(() -> new ResourceNotFoundException("Sales order not found: " + salesOrderId));
+
+        if (dto.getAmount() == null || dto.getAmount().signum() <= 0) {
+            throw new IllegalArgumentException("Payment amount must be greater than zero");
+        }
+        if (order.getTotalPayableAmount() != null) {
+            BigDecimal alreadyReceived = paymentRepository.sumAmountBySalesOrderId(salesOrderId);
+            BigDecimal balance = order.getTotalPayableAmount().subtract(alreadyReceived == null ? BigDecimal.ZERO : alreadyReceived);
+            if (dto.getAmount().compareTo(balance.add(new BigDecimal("0.01"))) > 0) {
+                throw new IllegalArgumentException("Receipt of " + dto.getAmount().setScale(2, java.math.RoundingMode.HALF_UP)
+                        + " exceeds the balance due of " + balance.max(BigDecimal.ZERO).setScale(2, java.math.RoundingMode.HALF_UP));
+            }
+        }
+
+        SalesPayment payment = new SalesPayment();
+        payment.setSalesOrder(order);
+        payment.setPaymentDate(dto.getPaymentDate());
+        payment.setAmount(dto.getAmount());
+        payment.setPaymentMode(dto.getPaymentMode());
+        payment.setReferenceNumber(dto.getReferenceNumber());
+        payment.setNotes(dto.getNotes());
+
+        SalesPayment saved = paymentRepository.save(payment);
+
+        // Accounting auto-posts the RECEIPT voucher (listener runs after this tx commits).
+        domainEventPublisher.publish(new SalesPaymentReceivedEvent(saved.getId()));
+        return toDto(saved, order.getOrderNumber());
+    }
+
+    @Override
+    public List<SalesPaymentDto> getPaymentsForOrder(Long salesOrderId) {
+        return paymentRepository.findBySalesOrderIdOrderByPaymentDateAsc(salesOrderId)
+                .stream()
+                .map(p -> toDto(p, p.getSalesOrder().getOrderNumber()))
+                .toList();
+    }
+
+    @Override
+    public void deletePayment(Long paymentId) {
+        SalesPayment payment = paymentRepository.findById(paymentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Payment not found: " + paymentId));
+        // The row is removed, so the audit trail keeps a full copy of what was deleted and by whom.
+        String order = payment.getSalesOrder() != null ? payment.getSalesOrder().getOrderNumber() : null;
+        java.util.Map<String, Object> copy = new java.util.LinkedHashMap<>();
+        copy.put("salesOrder", order);
+        copy.put("paymentDate", payment.getPaymentDate() != null ? payment.getPaymentDate().toString() : null);
+        copy.put("amount", payment.getAmount());
+        copy.put("paymentMode", payment.getPaymentMode() != null ? payment.getPaymentMode().name() : null);
+        copy.put("referenceNumber", payment.getReferenceNumber());
+        copy.put("notes", payment.getNotes());
+        copy.put("recordedOn", payment.getCreationDate());
+        auditTrail.record(AuditEvent.of(AuditActions.DELETE, SourceDocTypes.SALES_PAYMENT, paymentId)
+                .label("Payment #" + paymentId + (order != null ? " on " + order : ""))
+                .summary("Customer payment of " + payment.getAmount() + " deleted").details(copy));
+        paymentRepository.delete(payment);
+
+        // Accounting reverses the RECEIPT voucher (listener runs after this tx commits).
+        domainEventPublisher.publish(new DocumentVoidedEvent(SourceDocTypes.SALES_PAYMENT, paymentId, "Payment deleted"));
+    }
+
+    @Override
+    public BigDecimal getTotalPaidForOrder(Long salesOrderId) {
+        return paymentRepository.sumAmountBySalesOrderId(salesOrderId);
+    }
+
+    private SalesPaymentDto toDto(SalesPayment p, String orderNumber) {
+        SalesPaymentDto dto = new SalesPaymentDto();
+        dto.setId(p.getId());
+        dto.setSalesOrderId(p.getSalesOrder().getId());
+        dto.setOrderNumber(orderNumber);
+        dto.setPaymentDate(p.getPaymentDate());
+        dto.setAmount(p.getAmount());
+        dto.setPaymentMode(p.getPaymentMode());
+        dto.setReferenceNumber(p.getReferenceNumber());
+        dto.setNotes(p.getNotes());
+        dto.setCreationDate(p.getCreationDate());
+        return dto;
+    }
+}

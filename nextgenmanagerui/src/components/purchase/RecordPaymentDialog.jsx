@@ -1,0 +1,252 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+    Dialog, DialogTitle, DialogContent, DialogActions, Divider,
+    Stack, Typography, Alert, TextField, FormControl, InputLabel,
+    Select, MenuItem, Table, TableHead, TableRow, TableCell, TableBody,
+    Chip, IconButton, Button, Box, CircularProgress,
+} from '@mui/material';
+import { Add, DeleteOutline, Payments } from '@mui/icons-material';
+import { getPaymentsForInvoice, getPaymentSummary, recordVendorPayment, deleteVendorPayment } from '../../services/vendorPaymentService';
+import { listTdsSections } from '../../services/accounting/tdsService';
+import { T, STATUS } from '../../theme/moduleTokens';
+
+
+const PAYMENT_MODES = [
+    { value: 'CASH',   label: 'Cash' },
+    { value: 'CHEQUE', label: 'Cheque' },
+    { value: 'NEFT',   label: 'NEFT' },
+    { value: 'RTGS',   label: 'RTGS' },
+    { value: 'UPI',    label: 'UPI' },
+    { value: 'OTHER',  label: 'Other' },
+];
+
+const EMPTY_FORM = {
+    paymentDate: new Date().toISOString().split('T')[0],
+    amount: '', paymentMode: 'NEFT', referenceNumber: '', notes: '', tdsSectionCode: '',
+};
+
+const fmt = (n) => n != null ? Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2 }) : '0.00';
+
+const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+export default function RecordPaymentDialog({ open, invoice, onClose, onChanged }) {
+    const [payments, setPayments] = useState([]);
+    const [totalPaid, setTotalPaid] = useState(0);
+    const [loading, setLoading] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [deleting, setDeleting] = useState(null);
+    const [error, setError] = useState(null);
+    const [form, setForm] = useState(EMPTY_FORM);
+    const [tdsSections, setTdsSections] = useState([]);
+
+    const load = useCallback(async () => {
+        if (!invoice) return;
+        setLoading(true);
+        try {
+            const [pmts, summary, sections] = await Promise.all([
+                getPaymentsForInvoice(invoice.id),
+                getPaymentSummary(invoice.id),
+                listTdsSections(true).catch(() => []),
+            ]);
+            setPayments(pmts ?? []);
+            setTotalPaid(Number(summary?.totalPaid ?? 0));
+            setTdsSections(sections ?? []);
+        } catch {
+        } finally {
+            setLoading(false);
+        }
+    }, [invoice]);
+
+    useEffect(() => {
+        if (open) load();
+        else { setForm(EMPTY_FORM); setError(null); }
+    }, [open, load]);
+
+    const handleChange = (e) => setForm(f => ({ ...f, [e.target.name]: e.target.value }));
+
+    // Derived TDS: section → rate → withheld amount → net payable to vendor.
+    const amountNum = parseFloat(form.amount) || 0;
+    const tds = (() => {
+        const section = tdsSections.find(s => s.section === form.tdsSectionCode);
+        if (!section || amountNum <= 0) return { section: null, amount: 0, net: amountNum };
+        // TDS is on the taxable value; GST charged on top of it is outside the deduction base.
+        const grand = Number(invoice?.grandTotal) || 0;
+        const taxableShare = grand > 0 && invoice?.subtotal != null ? Number(invoice.subtotal) / grand : 1;
+        const amt = round2(amountNum * taxableShare * Number(section.rate) / 100);
+        return { section, amount: amt, net: round2(amountNum - amt) };
+    })();
+
+    const handleSubmit = async () => {
+        if (!form.amount || parseFloat(form.amount) <= 0) { setError('Please enter a valid amount.'); return; }
+        setSaving(true); setError(null);
+        try {
+            await recordVendorPayment(invoice.id, {
+                paymentDate:     form.paymentDate,
+                amount:          parseFloat(form.amount),
+                paymentMode:     form.paymentMode,
+                referenceNumber: form.referenceNumber || null,
+                notes:           form.notes || null,
+                tdsSectionCode:  tds.section ? tds.section.section : null,
+                tdsRate:         tds.section ? tds.section.rate : null,
+                tdsAmount:       tds.amount || 0,
+            });
+            setForm(EMPTY_FORM);
+            await load();
+            onChanged?.();
+        } catch (e) {
+            setError(e?.response?.data?.message ?? 'Failed to record payment.');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const handleDelete = async (paymentId) => {
+        if (!window.confirm('Delete this payment entry?')) return;
+        setDeleting(paymentId);
+        try {
+            await deleteVendorPayment(invoice.id, paymentId);
+            await load();
+            onChanged?.();
+        } catch {
+            setError('Failed to delete payment.');
+        } finally {
+            setDeleting(null);
+        }
+    };
+
+    const totalPayable = Number(invoice?.grandTotal ?? 0);
+    const balanceDue = Math.max(0, totalPayable - totalPaid);
+
+    return (
+        <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth
+            PaperProps={{ sx: { borderRadius: 4, p: 0 } }}>
+            <DialogTitle sx={{ fontWeight: 900, fontSize: '1.1rem', pb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Payments sx={{ color: T.accent }} />
+                Record Payment — {invoice?.invoiceNumber}
+            </DialogTitle>
+            <Divider />
+            <DialogContent sx={{ pt: 2.5, pb: 1 }}>
+                {/* Summary */}
+                <Stack direction="row" spacing={2} sx={{ mb: 3 }}>
+                    {[
+                        { label: 'Invoice Total', value: totalPayable, color: T.ink },
+                        { label: 'Total Paid',    value: totalPaid,    color: STATUS.good },
+                        { label: 'Balance Due',   value: balanceDue,   color: balanceDue > 0 ? STATUS.critical : STATUS.good },
+                    ].map(({ label, value, color }) => (
+                        <Stack key={label} alignItems="center" flex={1}
+                            sx={{ p: 1.5, borderRadius: 3, bgcolor: T.ground, border: `1px solid ${T.rule}` }}>
+                            <Typography sx={{ fontSize: '0.65rem', color: T.ink2, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}>{label}</Typography>
+                            <Typography sx={{ fontWeight: 900, fontSize: '1rem', color }}>₹{fmt(value)}</Typography>
+                        </Stack>
+                    ))}
+                </Stack>
+
+                <Typography sx={{ fontWeight: 800, fontSize: '0.8rem', color: T.ink2, textTransform: 'uppercase', mb: 1.5, letterSpacing: '0.05em' }}>
+                    Add New Payment
+                </Typography>
+                {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }} onClose={() => setError(null)}>{error}</Alert>}
+
+                <Stack spacing={2}>
+                    <Stack direction="row" spacing={2}>
+                        <TextField fullWidth label="Payment Date *" type="date" name="paymentDate"
+                            value={form.paymentDate} onChange={handleChange}
+                            InputLabelProps={{ shrink: true }}
+                            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5 } }} />
+                        <TextField fullWidth label="Amount (₹) *" type="number" name="amount"
+                            value={form.amount} onChange={handleChange}
+                            inputProps={{ min: 0.01, step: 0.01 }}
+                            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5 } }} />
+                    </Stack>
+                    <Stack direction="row" spacing={2}>
+                        <FormControl fullWidth>
+                            <InputLabel>Mode of Payment *</InputLabel>
+                            <Select name="paymentMode" value={form.paymentMode} onChange={handleChange}
+                                label="Mode of Payment *" sx={{ borderRadius: 2.5 }}>
+                                {PAYMENT_MODES.map(m => <MenuItem key={m.value} value={m.value}>{m.label}</MenuItem>)}
+                            </Select>
+                        </FormControl>
+                        <TextField fullWidth label="Reference / Cheque No." name="referenceNumber"
+                            value={form.referenceNumber} onChange={handleChange}
+                            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5 } }} />
+                    </Stack>
+                    <Stack direction="row" spacing={2} alignItems="center">
+                        <FormControl fullWidth>
+                            <InputLabel>TDS Section (optional)</InputLabel>
+                            <Select name="tdsSectionCode" value={form.tdsSectionCode} onChange={handleChange}
+                                label="TDS Section (optional)" sx={{ borderRadius: 2.5 }}>
+                                <MenuItem value=""><em>No TDS</em></MenuItem>
+                                {tdsSections.map(s => (
+                                    <MenuItem key={s.id} value={s.section}>{s.section} — {s.rate}%</MenuItem>
+                                ))}
+                            </Select>
+                        </FormControl>
+                        {tds.section ? (
+                            <Stack flex={1} sx={{ p: 1.25, borderRadius: 2.5, bgcolor: T.ground, border: `1px solid ${T.rule}` }}>
+                                <Typography sx={{ fontSize: '0.62rem', color: T.ink2, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}>
+                                    TDS ₹{fmt(tds.amount)} · Net to vendor
+                                </Typography>
+                                <Typography sx={{ fontWeight: 900, fontSize: '0.95rem', color: T.ink }}>₹{fmt(tds.net)}</Typography>
+                            </Stack>
+                        ) : <Box flex={1} />}
+                    </Stack>
+                    <TextField fullWidth label="Notes" name="notes" value={form.notes} onChange={handleChange}
+                        multiline rows={2} sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5 } }} />
+                </Stack>
+
+                {loading ? (
+                    <Box sx={{ textAlign: 'center', py: 3 }}><CircularProgress size={24} /></Box>
+                ) : payments.length > 0 && (
+                    <>
+                        <Divider sx={{ my: 2.5 }} />
+                        <Typography sx={{ fontWeight: 800, fontSize: '0.8rem', color: T.ink2, textTransform: 'uppercase', mb: 1.5, letterSpacing: '0.05em' }}>
+                            Payment History
+                        </Typography>
+                        <Table size="small">
+                            <TableHead>
+                                <TableRow sx={{ '& th': { fontWeight: 700, fontSize: '0.7rem', color: T.ink2, bgcolor: T.ground } }}>
+                                    <TableCell>Date</TableCell>
+                                    <TableCell>Mode</TableCell>
+                                    <TableCell>Reference</TableCell>
+                                    <TableCell align="right">Amount</TableCell>
+                                    <TableCell />
+                                </TableRow>
+                            </TableHead>
+                            <TableBody>
+                                {payments.map(p => (
+                                    <TableRow key={p.id} sx={{ '& td': { fontSize: '0.8rem' } }}>
+                                        <TableCell>{p.paymentDate}</TableCell>
+                                        <TableCell>
+                                            <Chip label={p.paymentMode} size="small"
+                                                sx={{ fontSize: '0.65rem', fontWeight: 700, height: 18, borderRadius: 1 }} />
+                                        </TableCell>
+                                        <TableCell sx={{ color: T.ink2 }}>{p.referenceNumber || '—'}</TableCell>
+                                        <TableCell align="right" sx={{ fontWeight: 700 }}>₹{fmt(p.amount)}</TableCell>
+                                        <TableCell align="right">
+                                            <IconButton size="small" disabled={deleting === p.id}
+                                                onClick={() => handleDelete(p.id)}
+                                                sx={{ color: '#94a3b8', '&:hover': { color: STATUS.critical } }}>
+                                                {deleting === p.id
+                                                    ? <CircularProgress size={12} />
+                                                    : <DeleteOutline sx={{ fontSize: 15 }} />}
+                                            </IconButton>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </>
+                )}
+            </DialogContent>
+            <Divider />
+            <DialogActions sx={{ px: 3, py: 2 }}>
+                <Button onClick={onClose} sx={{ borderRadius: 2.5, textTransform: 'none', fontWeight: 700 }}>Close</Button>
+                <Button variant="contained" disableElevation disabled={saving}
+                    startIcon={saving ? <CircularProgress size={15} color="inherit" /> : <Add />}
+                    onClick={handleSubmit}
+                    sx={{ borderRadius: 2.5, textTransform: 'none', fontWeight: 800, bgcolor: T.accent, '&:hover': { bgcolor: '#1d4ed8' } }}>
+                    {saving ? 'Saving...' : 'Record Payment'}
+                </Button>
+            </DialogActions>
+        </Dialog>
+    );
+}

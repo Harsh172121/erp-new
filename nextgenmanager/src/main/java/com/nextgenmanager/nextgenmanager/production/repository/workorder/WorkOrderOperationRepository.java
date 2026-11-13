@@ -1,0 +1,199 @@
+package com.nextgenmanager.nextgenmanager.production.repository.workorder;
+
+import com.nextgenmanager.nextgenmanager.production.enums.OperationStatus;
+import com.nextgenmanager.nextgenmanager.production.model.WorkOrder;
+import com.nextgenmanager.nextgenmanager.production.model.WorkOrderLine;
+import com.nextgenmanager.nextgenmanager.production.model.WorkOrderOperation;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+import java.util.Date;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+
+public interface WorkOrderOperationRepository extends JpaRepository<WorkOrderOperation,Long> {
+
+    List<WorkOrderOperation> findByWorkOrderIdOrderBySequence(int workOrderId);
+
+    @Query("SELECT op FROM WorkOrderOperation op " +
+           "LEFT JOIN FETCH op.workCenter " +
+           "LEFT JOIN FETCH op.routingOperation " +
+           "LEFT JOIN FETCH op.assignedMachine " +
+           "WHERE op.workOrder.id = :workOrderId " +
+           "ORDER BY op.sequence")
+    List<WorkOrderOperation> findByWorkOrderIdWithAssociationsOrderBySequence(@Param("workOrderId") int workOrderId);
+
+    boolean existsByWorkOrderAndStatus(
+            WorkOrder workOrder,
+            OperationStatus status
+    );
+
+    /**
+     * @deprecated scoped to the work order, so on a multi-line work order it can return an
+     *             operation belonging to a DIFFERENT line. Use
+     *             {@link #findTopByWorkOrderLineAndSequenceLessThanOrderBySequenceDesc}.
+     */
+    @Deprecated
+    WorkOrderOperation findTopByWorkOrderAndSequenceLessThanOrderBySequenceDesc(
+            WorkOrder workOrder,
+            Integer sequence
+    );
+
+    /**
+     * @deprecated scoped to the work order, so on a multi-line work order it can return an
+     *             operation belonging to a DIFFERENT line. Use
+     *             {@link #findTopByWorkOrderLineAndSequenceGreaterThanOrderBySequenceAsc}.
+     */
+    @Deprecated
+    WorkOrderOperation findTopByWorkOrderAndSequenceGreaterThanOrderBySequenceAsc(
+            WorkOrder workOrder,
+            Integer sequence
+    );
+
+    /** The operation immediately upstream of {@code sequence} within the same line. */
+    WorkOrderOperation findTopByWorkOrderLineAndSequenceLessThanOrderBySequenceDesc(
+            WorkOrderLine workOrderLine,
+            Integer sequence
+    );
+
+    /** The operation immediately downstream of {@code sequence} within the same line. */
+    WorkOrderOperation findTopByWorkOrderLineAndSequenceGreaterThanOrderBySequenceAsc(
+            WorkOrderLine workOrderLine,
+            Integer sequence
+    );
+
+    boolean existsByWorkOrderAndStatusNot(
+            WorkOrder workOrder,
+            OperationStatus status
+    );
+
+    List<WorkOrderOperation> findByWorkOrder(WorkOrder workOrder);
+
+    Optional<WorkOrder> findByIdAndDeletedDateIsNull(Long id);
+
+    // ── Parallel operation dependency queries ──
+
+    /**
+     * Find all WorkOrderOperations that have {@code opId} in their dependsOnOperationIds set.
+     * Used after an operation completes to find which operations it unblocks.
+     */
+    @Query("SELECT op FROM WorkOrderOperation op JOIN op.dependsOnOperationIds depId " +
+           "WHERE depId = :opId AND op.deletedDate IS NULL")
+    List<WorkOrderOperation> findByDependsOnOperationId(@Param("opId") Long opId);
+
+    /**
+     * Count operations for a work order whose status is within the given set.
+     * Used to track how many operations are currently IN_PROGRESS or READY.
+     */
+    @Query("SELECT COUNT(op) FROM WorkOrderOperation op " +
+           "WHERE op.workOrder = :workOrder AND op.status IN :statuses AND op.deletedDate IS NULL")
+    long countByWorkOrderAndStatusIn(@Param("workOrder") WorkOrder workOrder,
+                                     @Param("statuses") Set<OperationStatus> statuses);
+
+    // ── Machine-level scheduling queries ──
+
+    List<WorkOrderOperation> findByAssignedMachineIdAndPlannedStartDateBetweenOrderByPlannedStartDateAsc(
+            Long machineId, Date from, Date to);
+
+    List<WorkOrderOperation> findByAssignedMachineIdAndStatusOrderByPlannedStartDateAsc(
+            Long machineId, OperationStatus status);
+
+    /**
+     * Every operation that still holds a resource after {@code from}: the load a scheduling run
+     * has to plan around. Finished and cancelled work no longer occupies anything. Running work
+     * is returned whatever its planned dates say: one that overruns its plan still holds its
+     * machine.
+     */
+    @Query("SELECT op FROM WorkOrderOperation op " +
+           "JOIN FETCH op.workOrder wo " +
+           "LEFT JOIN FETCH op.workCenter " +
+           "LEFT JOIN FETCH op.assignedMachine " +
+           "LEFT JOIN FETCH op.routingOperation " +
+           "WHERE ((op.plannedStartDate IS NOT NULL AND op.plannedEndDate > :from) " +
+           "       OR op.status = :runningStatus) " +
+           "AND op.deletedDate IS NULL " +
+           "AND op.status NOT IN :finishedOperationStatuses " +
+           "AND wo.workOrderStatus NOT IN :finishedWorkOrderStatuses")
+    List<WorkOrderOperation> findBookedLoad(
+            @Param("from") Date from,
+            @Param("runningStatus") OperationStatus runningStatus,
+            @Param("finishedOperationStatuses") List<OperationStatus> finishedOperationStatuses,
+            @Param("finishedWorkOrderStatuses") List<com.nextgenmanager.nextgenmanager.production.enums.WorkOrderStatus> finishedWorkOrderStatuses);
+
+    /**
+     * Every live operation whose planned time overlaps [from, to): the planner board. Overlap,
+     * not start, so a job that began before the window and is still running shows in it.
+     */
+    @Query("SELECT op FROM WorkOrderOperation op " +
+           "JOIN FETCH op.workOrder wo " +
+           "LEFT JOIN FETCH op.workCenter " +
+           "LEFT JOIN FETCH op.assignedMachine " +
+           "LEFT JOIN FETCH op.routingOperation " +
+           "LEFT JOIN FETCH op.workOrderLine l " +
+           "LEFT JOIN FETCH l.inventoryItem " +
+           "WHERE op.plannedStartDate < :to AND op.plannedEndDate > :from " +
+           "AND op.deletedDate IS NULL AND wo.deletedDate IS NULL " +
+           "AND op.status <> :cancelledOperation " +
+           "AND wo.workOrderStatus NOT IN :closedWorkOrders " +
+           "ORDER BY op.plannedStartDate, op.sequence")
+    List<WorkOrderOperation> findBoardOperations(
+            @Param("from") Date from,
+            @Param("to") Date to,
+            @Param("cancelledOperation") OperationStatus cancelledOperation,
+            @Param("closedWorkOrders") List<com.nextgenmanager.nextgenmanager.production.enums.WorkOrderStatus> closedWorkOrders);
+
+    // ── Schedule view queries ──
+    // All queries: exclude soft-deleted ops + cancelled ops + soft-deleted WOs
+
+    @Query("SELECT op FROM WorkOrderOperation op " +
+           "LEFT JOIN FETCH op.workOrder wo " +
+           "LEFT JOIN FETCH op.workCenter wc " +
+           "LEFT JOIN FETCH op.assignedMachine m " +
+           "LEFT JOIN FETCH op.routingOperation ro " +
+           "LEFT JOIN FETCH wo.bom b " +
+           "LEFT JOIN FETCH b.parentInventoryItem " +
+           "WHERE wc.id = :workCenterId " +
+           "AND op.plannedStartDate >= :fromDate AND op.plannedStartDate < :toDate " +
+           "AND op.deletedDate IS NULL AND wo.deletedDate IS NULL " +
+           "AND op.status <> com.nextgenmanager.nextgenmanager.production.enums.OperationStatus.CANCELLED " +
+           "ORDER BY op.plannedStartDate, op.sequence")
+    List<WorkOrderOperation> findScheduleByWorkCenter(
+            @Param("workCenterId") Integer workCenterId,
+            @Param("fromDate") Date fromDate,
+            @Param("toDate") Date toDate);
+
+    @Query("SELECT op FROM WorkOrderOperation op " +
+           "LEFT JOIN FETCH op.workOrder wo " +
+           "LEFT JOIN FETCH op.workCenter wc " +
+           "LEFT JOIN FETCH op.assignedMachine m " +
+           "LEFT JOIN FETCH op.routingOperation ro " +
+           "LEFT JOIN FETCH wo.bom b " +
+           "LEFT JOIN FETCH b.parentInventoryItem " +
+           "WHERE op.plannedStartDate >= :fromDate AND op.plannedStartDate < :toDate " +
+           "AND op.status IN :statuses " +
+           "AND op.deletedDate IS NULL AND wo.deletedDate IS NULL " +
+           "ORDER BY wc.centerCode, op.plannedStartDate, op.sequence")
+    List<WorkOrderOperation> findScheduleByDateRangeAndStatuses(
+            @Param("fromDate") Date fromDate,
+            @Param("toDate") Date toDate,
+            @Param("statuses") List<OperationStatus> statuses);
+
+    @Query("SELECT op FROM WorkOrderOperation op " +
+           "LEFT JOIN FETCH op.workOrder wo " +
+           "LEFT JOIN FETCH op.workCenter wc " +
+           "LEFT JOIN FETCH op.assignedMachine m " +
+           "LEFT JOIN FETCH op.routingOperation ro " +
+           "LEFT JOIN FETCH wo.bom b " +
+           "LEFT JOIN FETCH b.parentInventoryItem " +
+           "WHERE m.id = :machineId " +
+           "AND op.plannedStartDate >= :fromDate AND op.plannedStartDate < :toDate " +
+           "AND op.deletedDate IS NULL AND wo.deletedDate IS NULL " +
+           "AND op.status <> com.nextgenmanager.nextgenmanager.production.enums.OperationStatus.CANCELLED " +
+           "ORDER BY op.plannedStartDate, op.sequence")
+    List<WorkOrderOperation> findScheduleByMachine(
+            @Param("machineId") Long machineId,
+            @Param("fromDate") Date fromDate,
+            @Param("toDate") Date toDate);
+}

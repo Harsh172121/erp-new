@@ -1,0 +1,676 @@
+import "bootstrap/dist/css/bootstrap.min.css";
+import "./App.css";
+import { useState } from "react";
+import { BrowserRouter as Router, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { useMediaQuery } from "@mui/material";
+import InventoryItem from "./components/inventoryitem/InventoryItem";
+import Home from "./pages/Home";
+import BomPage from "./pages/BomPage";
+import InventoryPage from "./pages/InventoryPage";
+import Sidebar from "./components/ui/sidebar/Sidebar";
+import ModuleSubSidebar from "./components/ui/moduleshell/ModuleSubSidebar";
+import AppLauncherPage from "./pages/AppLauncherPage";
+import AccountingPage from "./pages/AccountingPage";
+import PlanningPage from "./pages/PlanningPage";
+import PlanningDeskPage from "./components/planning/PlanningDeskPage";
+import WarehousePage from "./components/inventory/warehouse/WarehousePage";
+import PickListPage from "./components/inventory/picking/PickListPage";
+import WarehouseDetailPage from "./components/inventory/warehouse/WarehouseDetailPage";
+import PickListDetailPage from "./components/inventory/picking/PickListDetailPage";
+import PackingSlipPage from "./components/inventory/packing/PackingSlipPage";
+import PackingSlipDetailPage from "./components/inventory/packing/PackingSlipDetailPage";
+import QualityDeskPage from "./components/quality/QualityDeskPage";
+import InspectionLotDetailPage from "./components/quality/InspectionLotDetailPage";
+import StockTransferPage from "./components/inventory/transfer/StockTransferPage";
+import StockTransferDetailPage from "./components/inventory/transfer/StockTransferDetailPage";
+import Contact from "./components/contact/Contact";
+import EnquiryPage from "./pages/EnquiryPage";
+import CrmDashboard from "./components/crm/CrmDashboard";
+import RevenueDashboard from "./components/crm/RevenueDashboard";
+import AiLeadReview from "./components/crm/AiLeadReview";
+import QuotationPage from "./pages/QuotationPage";
+import WorkOrderPage from "./pages/WorkOrderPage";
+import ProductionJobPage from "./pages/ProductionJobPage";
+import MachineAssetsPage from "./pages/MachineAssetsPage";
+import ShopFloorPage from "./pages/ShopFloorPage";
+import LaborRolePage from "./pages/LaborRolePage";
+import HolidayCalendarPage from "./pages/HolidayCalendarPage";
+import ItemCodeMappingPage from "./pages/ItemCodeMappingPage";
+import SalesOrder from "./components/sales/salesorder/SalesOrder";
+import Toolbar from "./components/ui/toolbar/Toolbar";
+import ManufacturingPage from "./pages/ManufacturingPage";
+import RoutingPage from "./pages/RoutingPage";
+import ProductionSchedulePage from "./pages/ProductionSchedulePage";
+import MakeBuyAnalysisPage from "./pages/MakeBuyAnalysisPage";
+import JobWorkChallanPage from "./pages/JobWorkChallanPage";
+import LoginPage from "./pages/LoginPage";
+import MaterialRequestDashboard from "./components/inventory/MaterialRequestDashboard";
+import { AuthProvider } from "./auth/AuthContext";
+import { FEATURES, ServerFeaturesProvider, useServerFeatures } from "./config/ServerFeaturesContext";
+import ProtectedRoute from "./auth/ProtectedRoute";
+import PublicOnlyRoute from "./auth/PublicOnlyRoute";
+import RoleProtectedRoute from "./auth/RoleProtectedRoute";
+import {
+    ACCOUNTING_ACCESS_ROLES,
+    CONTACT_ACCESS_ROLES,
+    INVENTORY_ACCESS_ROLES,
+    ITEM_CODE_MAPPING_ACCESS_ROLES,
+    PLANNING_ACCESS_ROLES,
+    PRODUCTION_ACCESS_ROLES,
+    PURCHASE_ACCESS_ROLES,
+    SALES_ACCESS_ROLES,
+    USER_MANAGEMENT_ACCESS_ROLES,
+} from "./auth/roles";
+import UserCreatePage from "./pages/UserCreatePage";
+import RoleManagementPage from "./pages/RoleManagementPage";
+import AccountSettingsPage from "./pages/AccountSettingsPage";
+import CompanyDetailsPage from "./pages/CompanyDetailsPage";
+import AuthStatusSnackbar from "./components/ui/feedback/AuthStatusSnackbar";
+import OEEDashboardPage from "./pages/OEEDashboardPage";
+import DowntimeReasonPage from "./pages/DowntimeReasonPage";
+import PurchasePage from "./pages/PurchasePage";
+
+// Machine Assets moved from Production to Shop Setup; old links and bookmarks still land on the same page.
+function MachineAssetsRedirect() {
+    const location = useLocation();
+    const to = location.pathname.replace("/production/machine-assets", "/manufacturing/machine-assets");
+    return <Navigate to={to + location.search} replace />;
+}
+
+function AppShell() {
+    const isSmallScreen = useMediaQuery("(max-width:900px)");
+    const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+    const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(
+        () => localStorage.getItem("ngm.sidebar.collapsed") === "true"
+    );
+    const location = useLocation();
+    const isAccountingRoute = location.pathname.startsWith("/accounting");
+    const isPlanningRoute = location.pathname.startsWith("/planning");
+    const moduleShellRoute = isAccountingRoute || isPlanningRoute;
+    const activeModuleKey = isPlanningRoute ? "planning" : "accounting";
+    const { isFeatureEnabled } = useServerFeatures();
+    const aiLeadAgentEnabled = isFeatureEnabled(FEATURES.AI_LEAD_AGENT);
+
+    const handleToggleSidebar = () => {
+        if (isSmallScreen) {
+            setMobileSidebarOpen(true);
+            return;
+        }
+        setIsSidebarCollapsed((prev) => {
+            const next = !prev;
+            localStorage.setItem("ngm.sidebar.collapsed", next);
+            return next;
+        });
+    };
+
+    const handleCloseSidebar = () => {
+        setMobileSidebarOpen(false);
+    };
+
+    return (
+        <div style={{ display: "flex" }}>
+            {/* Contextual sub-sidebar: module-shell modules vs legacy operations */}
+            {moduleShellRoute ? (
+                <ModuleSubSidebar
+                    moduleKey={activeModuleKey}
+                    isSmallScreen={isSmallScreen}
+                    mobileOpen={mobileSidebarOpen}
+                    onMobileClose={handleCloseSidebar}
+                />
+            ) : (
+                <Sidebar
+                    isSmallScreen={isSmallScreen}
+                    mobileOpen={mobileSidebarOpen}
+                    onMobileClose={handleCloseSidebar}
+                    collapsed={isSidebarCollapsed}
+                    onToggleCollapse={() => setIsSidebarCollapsed((prev) => {
+                        const next = !prev;
+                        localStorage.setItem("ngm.sidebar.collapsed", next);
+                        return next;
+                    })}
+                />
+            )}
+
+            <main style={{ flexGrow: 1, minWidth: 0 }}>
+                <Toolbar showMenuButton onMenuClick={handleToggleSidebar} />
+                <AuthStatusSnackbar />
+                <Routes>
+                    <Route path="/" element={<Home />} />
+                    <Route path="/dashboard" element={<Home />} />
+                    <Route
+                        path="/inventory-item/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={ITEM_CODE_MAPPING_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for product master."
+                            >
+                                <InventoryItem />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/bom/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={PRODUCTION_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for BOM."
+                            >
+                                <BomPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/manufacturing/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={PRODUCTION_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for manufacturing."
+                            >
+                                <ManufacturingPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/inventory/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={INVENTORY_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for inventory."
+                            >
+                                <InventoryPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/inventory/material-requests/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={INVENTORY_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for material requests."
+                            >
+                                <MaterialRequestDashboard />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/inventory/warehouses"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={INVENTORY_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for warehouses."
+                            >
+                                <WarehousePage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/inventory/warehouses/:id"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={INVENTORY_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for warehouses."
+                            >
+                                <WarehouseDetailPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/inventory/pick-lists"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={INVENTORY_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for pick lists."
+                            >
+                                <PickListPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/inventory/pick-lists/:id"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={INVENTORY_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for pick lists."
+                            >
+                                <PickListDetailPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/quality/inspections"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={[...new Set([...INVENTORY_ACCESS_ROLES, ...PRODUCTION_ACCESS_ROLES])]}
+                                deniedMessage="You are not authorized for quality inspections."
+                            >
+                                <QualityDeskPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/quality/inspections/:id"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={[...new Set([...INVENTORY_ACCESS_ROLES, ...PRODUCTION_ACCESS_ROLES])]}
+                                deniedMessage="You are not authorized for quality inspections."
+                            >
+                                <InspectionLotDetailPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/inventory/packing-slips"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={INVENTORY_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for packing slips."
+                            >
+                                <PackingSlipPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/inventory/packing-slips/:id"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={INVENTORY_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for packing slips."
+                            >
+                                <PackingSlipDetailPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/inventory/stock-transfers"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={INVENTORY_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for stock transfers."
+                            >
+                                <StockTransferPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/inventory/stock-transfers/:id"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={INVENTORY_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for stock transfers."
+                            >
+                                <StockTransferDetailPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/contact/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={CONTACT_ACCESS_ROLES}
+                                deniedMessage="You are not authorized to access contacts."
+                            >
+                                <Contact />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/enquiry/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={SALES_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for enquiries."
+                            >
+                                <EnquiryPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    {/* Period-aware pipeline analytics. The register at /enquiry keeps its own
+                        all-time tile strip; this is the view that answers "versus last month". */}
+                    <Route
+                        path="/crm/pipeline"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={SALES_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for the sales pipeline."
+                            >
+                                <CrmDashboard />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    {/* The money half of the same dashboard: what was ordered rather than what
+                        might be won. Same period rail, same shell, one click apart. */}
+                    <Route
+                        path="/crm/revenue"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={SALES_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for sales analytics."
+                            >
+                                <RevenueDashboard />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    {/* Adjudication desk for the AI Lead Agent. Same sales roles as the rest of
+                        the CRM: approving a lead here files an enquiry into the register, so it is
+                        a sales action, not an administrative one.
+
+                        Registered only where the server reports an agent configured, so on a
+                        deployment without one the path falls through to the catch-all redirect
+                        below rather than opening a desk with no service behind it. The role gate
+                        still applies on top: having the agent installed is not permission to
+                        adjudicate leads. */}
+                    {aiLeadAgentEnabled && (
+                        <Route
+                            path="/crm/ai-leads"
+                            element={
+                                <RoleProtectedRoute
+                                    allowedRoles={SALES_ACCESS_ROLES}
+                                    deniedMessage="You are not authorized to review AI leads."
+                                >
+                                    <AiLeadReview />
+                                </RoleProtectedRoute>
+                            }
+                        />
+                    )}
+                    <Route
+                        path="/quotation/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={SALES_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for quotations."
+                            >
+                                <QuotationPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/production/work-order/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={PRODUCTION_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for work orders."
+                            >
+                                <WorkOrderPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/production/make-or-buy/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={PRODUCTION_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for make or buy analysis."
+                            >
+                                <MakeBuyAnalysisPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    {/* Planning Desk surfaced inside Manufacturing/Production (same desk as the Planning module) */}
+                    <Route
+                        path="/production/planning-desk"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={PLANNING_ACCESS_ROLES}
+                                deniedMessage="You are not authorized to access the Planning Desk."
+                            >
+                                <PlanningDeskPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/production/production-job/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={PRODUCTION_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for production jobs."
+                            >
+                                <ProductionJobPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/production/shop-floor/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={PRODUCTION_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for the shop floor."
+                            >
+                                <ShopFloorPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/manufacturing/machine-assets/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={PRODUCTION_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for machine assets."
+                            >
+                                <MachineAssetsPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route path="/production/machine-assets/*" element={<MachineAssetsRedirect />} />
+                    <Route
+                        path="/production/labor-role/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={PRODUCTION_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for labor roles."
+                            >
+                                <LaborRolePage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/production/schedule/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={PRODUCTION_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for production schedules."
+                            >
+                                <ProductionSchedulePage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/production/calendar/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={PRODUCTION_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for holiday calendars."
+                            >
+                                <HolidayCalendarPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/production/oee-dashboard"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={PRODUCTION_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for OEE dashboard."
+                            >
+                                <OEEDashboardPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/manufacturing/downtime-reasons"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={PRODUCTION_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for downtime reasons."
+                            >
+                                <DowntimeReasonPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/production/job-work-challan/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={PRODUCTION_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for job work challans."
+                            >
+                                <JobWorkChallanPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    {/* <Route
+                        path="/manufacturing/routing/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={PRODUCTION_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for routing."
+                            >
+                                <RoutingPage />
+                            </RoleProtectedRoute>
+                        }
+                    /> */}
+                    <Route
+                        path="/sales/sales-order/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={SALES_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for sales orders."
+                            >
+                                <SalesOrder />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/purchase/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={PURCHASE_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for purchase orders."
+                            >
+                                <PurchasePage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/config/item-code-mapping/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={ITEM_CODE_MAPPING_ACCESS_ROLES}
+                                deniedMessage="You are not authorized for item code mapping."
+                            >
+                                <ItemCodeMappingPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/superadmin/users"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={USER_MANAGEMENT_ACCESS_ROLES}
+                                deniedMessage="User management requires admin access."
+                            >
+                                <UserCreatePage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/superadmin/roles"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={USER_MANAGEMENT_ACCESS_ROLES}
+                                deniedMessage="Role management requires admin access."
+                            >
+                                <RoleManagementPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    <Route path="/account/settings" element={<AccountSettingsPage />} />
+                    <Route
+                        path="/superadmin/company"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={USER_MANAGEMENT_ACCESS_ROLES}
+                                deniedMessage="Company details management requires admin access."
+                            >
+                                <CompanyDetailsPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+                    {/* Accounting module */}
+                    <Route
+                        path="/accounting/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={ACCOUNTING_ACCESS_ROLES}
+                                deniedMessage="You are not authorized to access the Accounting module."
+                            >
+                                <AccountingPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+
+                    {/* Planning module */}
+                    <Route
+                        path="/planning/*"
+                        element={
+                            <RoleProtectedRoute
+                                allowedRoles={PLANNING_ACCESS_ROLES}
+                                deniedMessage="You are not authorized to access the Planning module."
+                            >
+                                <PlanningPage />
+                            </RoleProtectedRoute>
+                        }
+                    />
+
+                    <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+            </main>
+        </div>
+    );
+}
+
+function App() {
+    return (
+        <div
+            className="app-class"
+            style={{
+                fontFamily:
+                    'ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji"',
+            }}
+        >
+            <Router>
+                <AuthProvider>
+                    <ServerFeaturesProvider>
+                        <Routes>
+                            <Route
+                                path="/login"
+                                element={
+                                    <PublicOnlyRoute>
+                                        <LoginPage />
+                                    </PublicOnlyRoute>
+                                }
+                            />
+                            <Route
+                                path="/apps"
+                                element={
+                                    <ProtectedRoute>
+                                        <AppLauncherPage />
+                                    </ProtectedRoute>
+                                }
+                            />
+                            <Route
+                                path="*"
+                                element={
+                                    <ProtectedRoute>
+                                        <AppShell />
+                                    </ProtectedRoute>
+                                }
+                            />
+                        </Routes>
+                    </ServerFeaturesProvider>
+                </AuthProvider>
+            </Router>
+        </div>
+    );
+}
+
+export default App;

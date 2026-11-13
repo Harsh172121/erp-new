@@ -1,0 +1,116 @@
+package com.nextgenmanager.nextgenmanager.sales.dto;
+
+import com.nextgenmanager.nextgenmanager.sales.model.SalesOrderApprovalStatus;
+import com.nextgenmanager.nextgenmanager.sales.model.SalesOrderItem;
+import com.nextgenmanager.nextgenmanager.sales.model.SalesOrderStatus;
+import com.nextgenmanager.nextgenmanager.sales.model.TaxType;
+import com.nextgenmanager.nextgenmanager.sales.model.VoucherType;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import lombok.*;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.Date;
+import java.util.List;
+
+@Data
+@Getter
+@Setter
+@AllArgsConstructor
+@NoArgsConstructor
+public class SalesOrderDto {
+
+    private Long id;
+    private String orderNumber;
+
+    @Enumerated(EnumType.STRING)
+    private VoucherType voucherType;                 // from VoucherType enum
+
+    // Party & Reference
+    private int customerId;
+    private String customerName;                // convenience for UI
+    private LocalDate orderDate;
+    private Long quotationId;
+    private String quotationNumber;             // convenience if needed
+
+    // The enquiry behind the order. Present even when quotationId is null -- an order taken by
+    // phone still belongs to the enquiry that produced it.
+    private Long enquiryId;
+    private String enquiryNumber;
+
+    // Status
+    @Enumerated(EnumType.STRING)
+    private SalesOrderStatus status;                       // from SalesOrderStatus enum
+
+    // Line items
+    private List<SalesOrderItemDto> items;
+
+    // Commercial summary
+    private BigDecimal subTotal;
+    private BigDecimal discountPercentage;
+    private BigDecimal discountAmount;
+    private boolean includeFreightCharges;
+    private BigDecimal freightAndForwardingCharges;
+    private BigDecimal taxableValue;
+    private TaxType taxType;
+
+    private BigDecimal cgstAmount;
+    private BigDecimal sgstAmount;
+    private BigDecimal igstAmount;
+    private BigDecimal cessAmount;
+    private BigDecimal roundOffAmount;
+    private BigDecimal netAmount;
+
+    // Payment & Terms
+    private String paymentTerms;
+    private String incoterms;
+    private String currency;
+    private BigDecimal exchangeRate;
+
+    // Bill to / ship to, as entered on the order (blank where the order leaves it to the default)
+    private String billToAddress;
+    private String deliveryAddress;
+    private String shipToName;
+    private String shipToGstin;
+    private String shipToStateCode;
+
+    // The two parties as they will print, blanks filled in. Read-only: set by getSalesOrderById.
+    private DocumentParty billTo;
+    private DocumentParty shipTo;
+
+    // Logistics
+    private String dispatchThrough;
+    private String transportMode;
+    private String ewayBillNumber;
+    private LocalDate deliveryDate;
+    /** The warehouse the order is dispatched from; null where it is left to the default. */
+    private String dispatchWarehouseCode;
+    private String dispatchWarehouseName;
+    private String packagingInstructions;
+    private String shippingMethod;
+
+    // References
+    private String poNumber;
+    private LocalDate poDate;
+    private String reference;
+    private String remarks;
+    private String placeOfSupply;
+    private String placeOfSupplyStateCode;
+    private BigDecimal totalPayableAmount;
+
+    // Approval workflow
+    @Enumerated(EnumType.STRING)
+    private SalesOrderApprovalStatus approvalStatus;
+    private String approvedBy;
+    private Date approvedDate;
+    private String rejectionReason;
+    private Date sentToCustomerAt;
+    private String sentToCustomerEmail;
+    private Integer revisionNo;
+    private Long parentSoId;
+
+    // Payment summary (computed from SalesPayment records)
+    private BigDecimal totalAdvancePaid;
+    private BigDecimal balanceDue;
+}

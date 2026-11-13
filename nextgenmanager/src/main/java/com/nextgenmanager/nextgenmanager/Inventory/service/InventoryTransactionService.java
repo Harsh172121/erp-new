@@ -1,0 +1,137 @@
+package com.nextgenmanager.nextgenmanager.Inventory.service;
+
+import com.nextgenmanager.nextgenmanager.Inventory.dto.InventoryTransactionDTO;
+import com.nextgenmanager.nextgenmanager.Inventory.dto.StockReconciliationReportDto;
+import com.nextgenmanager.nextgenmanager.Inventory.dto.StockScalarCorrectionRowDto;
+import com.nextgenmanager.nextgenmanager.Inventory.model.InventoryLedger;
+
+import java.time.LocalDate;
+import java.util.List;
+
+/**
+ * Manages all stock movements via an immutable ledger.
+ *
+ * Golden rule — only two events change the physical stock balance:
+ *   CONSUME  → decreases stock (reserved → consumed)
+ *   PRODUCE  → increases stock (finished goods / purchase receipt / GRN)
+ *
+ * Everything else is a tracking layer:
+ *   RESERVE  → available → reserved   (committed to an order, still in warehouse)
+ *   ISSUE    → ledger note only        (physically moved to shop floor, no net change)
+ *   RETURN   → reserved/issued → available (put back, e.g. WO cancel / short-close)
+ *   ADJUSTMENT → direct correction
+ */
+public interface InventoryTransactionService {
+
+    /** Commits stock to an order. availableQty -= qty, reservedQty += qty. */
+    void reserveStock(InventoryTransactionDTO dto);
+
+    /**
+     * Records the physical move from warehouse to shop floor.
+     * Does NOT change any balance — stock was already removed from availableQty at RESERVE.
+     */
+    void issueStock(InventoryTransactionDTO dto);
+
+    /**
+     * Consumes reserved stock in production.
+     * This is the ONLY operation that reduces total physical stock.
+     */
+    void consumeStock(InventoryTransactionDTO dto);
+
+    /**
+     * Adds finished goods or purchased stock (GRN receipt) to inventory.
+     * availableQty += qty. This is the ONLY operation that increases total physical stock.
+     */
+    void produceStock(InventoryTransactionDTO dto);
+
+    /**
+     * Returns committed/issued stock back to available.
+     * availableQty += qty, reservedQty -= qty.
+     */
+    void returnStock(InventoryTransactionDTO dto);
+
+    /** Direct balance correction. Creates an ADJUSTMENT ledger entry. */
+    void adjustStock(InventoryTransactionDTO dto);
+
+    /**
+     * Takes back out the stock a sales return put in, when its credit note is cancelled. The units
+     * the return created are found by their credit note line and taken out as they are; the
+     * reversal is refused if any of them has since been reserved, picked, moved or used. A line
+     * with no units of its own (untracked good stock, or one confirmed before units were linked)
+     * comes out of the counters of the warehouse it went into.
+     *
+     * @param dto                    item, quantity (positive), warehouse, rate and reference
+     * @param salesCreditNoteItemId  the credit note line the stock came back on
+     */
+    void reverseSalesReturn(InventoryTransactionDTO dto, Long salesCreditNoteItemId);
+
+    /**
+     * Sets aside stock that is already on the books because an inspection rejected it: out of the
+     * warehouse it was received into and into quarantine, marked FAILED so it cannot be picked.
+     * The company-wide quantity does not change — the goods are still in the building.
+     *
+     * @param dto          item, quantity, the warehouse the stock is in, and the inspection as the
+     *                     reference
+     * @param sourceDocNo  the receipt the stock came in on; its own batches are set aside before
+     *                     any other
+     * @return the quantity actually set aside — less than asked when some of the stock has
+     *         already been reserved or used and is no longer free to move
+     */
+    double quarantineStock(InventoryTransactionDTO dto, String sourceDocNo);
+
+    /** Returns ledger entries for an item, newest first. */
+    List<InventoryLedger> getStockHistory(int itemId, LocalDate from, LocalDate to);
+
+    /**
+     * Returns the closing balance of the last ledger entry BEFORE the given date.
+     * Returns 0 if no entries exist before that date (i.e. item had no stock yet).
+     * Used to show "Opening Balance as on [date]" at the top of a ledger report.
+     */
+    double getOpeningBalance(int itemId, LocalDate asOf);
+
+    /** Returns the current closing balance for an item (from the most recent ledger entry). */
+    double getCurrentStock(int itemId, String warehouse);
+
+    /** Returns the total stock value for a warehouse (sum of GRN receipt amounts still in stock). */
+    double getStockValue(String warehouse);
+
+    /**
+     * Writes a SALES_DISPATCH ledger entry for goods dispatched via a Delivery Note.
+     * Does NOT modify ProductInventorySettings — that is already handled by
+     * InventoryInstanceService.updateItemAvailability() when instances are consumed.
+     * This is a ledger-only write so the Stock Ledger Report shows the outward movement.
+     *
+     * @param dto must contain: inventoryItemId, quantity (positive dispatch qty),
+     *            transactionType="SALES_DISPATCH", referenceType="DELIVERY_NOTE",
+     *            referenceDocNo=dnNumber, createdBy
+     */
+    void writeDispatchLedger(InventoryTransactionDTO dto);
+
+    /**
+     * Compares each item's stock counters against what its instance rows actually say.
+     * Read-only — it reports drift, it does not correct it, so it is safe to run against
+     * live books.
+     *
+     * @param onlyDrifted when true, returns only the items whose counters disagree
+     */
+    StockReconciliationReportDto reconcileStockScalars(boolean onlyDrifted);
+
+    /**
+     * Resets the named items' stock counters to what their instance rows say.
+     *
+     * <p>Deliberately writes no ledger entry: this corrects counters that drifted from
+     * the instance table, it does not record a physical movement. Inventing an
+     * ADJUSTMENT row would put a movement into the stock ledger that never happened,
+     * and would push the ledger out of step with the GL that posts from it.
+     *
+     * <p>Also rebuilds the item's per-warehouse counters from the warehouses those instances
+     * name, so a repair fixes both halves of the invariant rather than leaving the warehouse
+     * split behind. In-transit quantities are left alone: a stock transfer moves counters without
+     * touching instances, so nothing here can know about goods on a vehicle — which is also why
+     * this should not be run on an item with a transfer in flight.
+     *
+     * @param itemIds items to correct — named explicitly, never inferred
+     * @param reason  free text recorded in the log for audit
+     */
+    List<StockScalarCorrectionRowDto> correctStockScalars(List<Integer> itemIds, String reason);
+}

@@ -1,0 +1,51 @@
+/* ============================================
+   BOM - Enterprise Professional Theme
+   ============================================ */
+
+.bom {
+  padding: 1rem;
+}
+
+.search-bar-section {
+  height: auto;
+  min-width: 200px;
+}
+
+.input-group {
+  width: 100%;
+  max-width: 400px;
+}
+
+.dropdown-section {
+  width: 100%;
+  max-width: 400px;
+  font-size: 0.875rem;
+}
+
+.list-group-item {
+  height: 2.5rem;
+}
+
+.my-search-section {
+  width: 100%;
+  max-width: 400px;
+}
+
+.item-label {
+  flex-shrink: 0;
+  font-weight: 500;
+  font-size: 0.875rem;
+  color: #374151;
+}
+
+.dropdown-menu {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.dropdown-toggle {
+  width: 100%;
+  max-width: 300px;
+  height: 2.25rem;
+  margin-left: 0;
+}

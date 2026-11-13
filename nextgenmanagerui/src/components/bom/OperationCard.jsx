@@ -1,0 +1,150 @@
+import React, { useState } from 'react';
+import { Box, Chip, Collapse, Paper, Typography, Tooltip } from '@mui/material';
+import {
+  AccessTime, ExpandMore, ExpandLess, Visibility, Build, Engineering
+} from '@mui/icons-material';
+
+const BORDER_COLOR = '#e5e7eb';
+
+const COST_TYPE_LABELS = {
+  FIXED_RATE: 'Fixed',
+  SUB_CONTRACTED: 'Sub-con',
+  RATE_TIMES_QTY: 'Piece-rate',
+};
+
+export default function OperationCard({ operation, onClick, highlight }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const handleToggle = (e) => { e.stopPropagation(); setExpanded(!expanded); };
+
+  return (
+    <Paper
+      variant="outlined"
+      sx={{
+        mb: 1, borderRadius: 1.5, cursor: "pointer", overflow: "hidden",
+        borderColor: highlight ? '#1565c0' : BORDER_COLOR,
+        borderWidth: highlight ? 2 : 1,
+        bgcolor: highlight ? '#f0f7ff' : '#fff',
+        transition: 'all 0.15s',
+        '&:hover': { borderColor: '#90caf9', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' },
+      }}
+      onClick={onClick}
+    >
+      {/* Header */}
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 1.5, py: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1 }}>
+          <Box sx={{
+            width: 24, height: 24, borderRadius: '50%',
+            bgcolor: '#0f2744', color: '#fff',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: '0.7rem', fontWeight: 700, flexShrink: 0,
+          }}>
+            {operation.sequenceNumber || '#'}
+          </Box>
+          <Typography variant="body2" sx={{ fontWeight: 600, color: '#0f2744', fontSize: '0.8rem' }}>
+            {operation.name || 'Unnamed'}
+          </Typography>
+        </Box>
+
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          {operation.instructions && (
+            <Tooltip title="Has Instructions" arrow>
+              <Chip label="INS" size="small"
+                sx={{ height: 20, fontSize: '0.65rem', fontWeight: 700, bgcolor: '#e3f2fd', color: '#1565c0', border: '1px solid #1565c0' }} />
+            </Tooltip>
+          )}
+          {operation.inspection && (
+            <Chip icon={<Visibility sx={{ fontSize: 12 }} />} label="QC" size="small"
+              sx={{ height: 20, fontSize: '0.65rem', fontWeight: 500, bgcolor: '#e8f5e9', color: '#2e7d32' }} />
+          )}
+          {operation.costType && operation.costType !== 'CALCULATED' && (
+            <Chip label={COST_TYPE_LABELS[operation.costType] || operation.costType} size="small"
+              sx={{ height: 20, fontSize: '0.65rem', fontWeight: 500, bgcolor: '#fff3e0', color: '#e65100' }} />
+          )}
+          <Box onClick={handleToggle} sx={{ cursor: 'pointer', display: 'flex', alignItems: 'center', ml: 0.5 }}>
+            {expanded ? <ExpandLess sx={{ fontSize: 16, color: '#6b7280' }} /> : <ExpandMore sx={{ fontSize: 16, color: '#6b7280' }} />}
+          </Box>
+        </Box>
+      </Box>
+
+      {/* Summary row */}
+      <Box sx={{ display: 'flex', gap: 2, px: 1.5, pb: 1, flexWrap: 'wrap' }}>
+        {operation.productionJob?.jobName && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Build sx={{ fontSize: 11, color: '#6b7280' }} />
+            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+              {operation.productionJob.jobName}
+            </Typography>
+          </Box>
+        )}
+        {operation.workCenter?.centerName && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Engineering sx={{ fontSize: 11, color: '#6b7280' }} />
+            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+              {operation.workCenter.centerName}
+            </Typography>
+          </Box>
+        )}
+        {(operation.setupTime || operation.runTime) && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <AccessTime sx={{ fontSize: 11, color: '#6b7280' }} />
+            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+              {operation.setupTime || 0}m + {operation.runTime || 0}m/u
+            </Typography>
+          </Box>
+        )}
+        {operation.costType === 'RATE_TIMES_QTY' && operation.costQuantity != null && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Build sx={{ fontSize: 11, color: '#6b7280' }} />
+            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+              {operation.costQuantity}{operation.productionJob?.pieceUnit ? ` ${operation.productionJob.pieceUnit}` : ' ea'}
+              {(operation.costRate ?? operation.productionJob?.defaultPieceRate) != null &&
+                ` × ₹${operation.costRate ?? operation.productionJob.defaultPieceRate}`}
+            </Typography>
+          </Box>
+        )}
+      </Box>
+
+      {/* Expanded Details */}
+      <Collapse in={expanded}>
+        <Box sx={{ px: 1.5, pb: 1.5, pt: 1, borderTop: `1px solid ${BORDER_COLOR}`, bgcolor: '#fafafa' }}>
+          <Box display="grid" gridTemplateColumns="1fr 1fr" gap={1}>
+            <DetailItem label="Labor Role" value={operation.laborRole?.roleName} />
+            <DetailItem label="Machine" value={operation.machineDetails?.machineName} />
+            <DetailItem label="Operators" value={operation.numberOfOperators} />
+            <DetailItem label="Cost Type" value={operation.costType?.replace(/_/g, ' ')} />
+          </Box>
+          
+          {operation.instructions && (
+            <Box sx={{ mt: 1.5, p: 1, bgcolor: '#fff', borderRadius: 1, border: `1px solid ${BORDER_COLOR}` }}>
+              <Typography variant="caption" sx={{ fontWeight: 700, color: '#1565c0', textTransform: 'uppercase', display: 'block', mb: 0.5 }}>
+                Manufacturing Instructions
+              </Typography>
+              <Typography variant="body2" sx={{ fontSize: '0.75rem', color: '#374151', whiteSpace: 'pre-wrap' }}>
+                {operation.instructions}
+              </Typography>
+            </Box>
+          )}
+
+          {operation.notes && (
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block', fontSize: '0.7rem', fontStyle: 'italic' }}>
+              Notes: {operation.notes}
+            </Typography>
+          )}
+        </Box>
+      </Collapse>
+    </Paper>
+  );
+}
+
+function DetailItem({ label, value }) {
+  if (!value) return null;
+  return (
+    <Box>
+      <Typography sx={{ fontSize: '0.6rem', fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+        {label}
+      </Typography>
+      <Typography sx={{ fontSize: '0.75rem', fontWeight: 500, color: '#374151' }}>{value}</Typography>
+    </Box>
+  );
+}

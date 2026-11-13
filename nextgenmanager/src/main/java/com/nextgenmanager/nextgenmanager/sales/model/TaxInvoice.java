@@ -1,0 +1,89 @@
+package com.nextgenmanager.nextgenmanager.sales.model;
+
+import com.nextgenmanager.nextgenmanager.common.service.ExchangeRates;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import jakarta.persistence.*;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+
+@Entity
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Table(name = "taxInvoice")
+public class TaxInvoice {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.AUTO)
+    private Long id;
+
+    @Column(unique = true, nullable = false, length = 50)
+    private String invoiceNumber;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "salesorder_id")
+    @JsonIgnoreProperties({"deliveryNotes", "taxInvoices", "items"})
+    private SalesOrder salesOrder;
+
+    @Column(nullable = false)
+    private LocalDate invoiceDate;
+
+    private LocalDate dueDate;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 30)
+    private TaxInvoiceStatus status = TaxInvoiceStatus.DRAFT;
+
+    @Column(precision = 12, scale = 2) private BigDecimal subTotal;
+    @Column(precision = 12, scale = 2) private BigDecimal taxableValue;
+    @Column(precision = 12, scale = 2) private BigDecimal cgstAmount;
+    @Column(precision = 12, scale = 2) private BigDecimal sgstAmount;
+    @Column(precision = 12, scale = 2) private BigDecimal igstAmount;
+    @Column(precision = 12, scale = 2) private BigDecimal totalPayableAmount;
+    @Column(precision = 12, scale = 2) private BigDecimal paidAmount = BigDecimal.ZERO;
+
+    // The amounts above are in this currency. Both are copied from the order when the invoice is
+    // raised, so the posting, the GST returns and the printed copy agree however the order changes.
+    @Column(length = 20) private String currency;
+    /** Rupees per one unit of {@link #currency}. */
+    @Column(precision = 18, scale = 6, nullable = false) private BigDecimal exchangeRate = BigDecimal.ONE;
+
+    /** An amount on this invoice, in rupees: what the books and the GST returns take. */
+    public BigDecimal inRupees(BigDecimal amount) {
+        return ExchangeRates.toBase(amount, exchangeRate);
+    }
+
+    // Both parties as they stood when the invoice was raised (SalesParties.freezeOnto). Null on
+    // invoices older than V179, which read from their sales order instead.
+    @Column(length = 255) private String billToName;
+    @Column(length = 500) private String billToAddress;
+    @Column(length = 15)  private String billToGstin;
+    @Column(length = 2)   private String billToStateCode;
+    @Column(length = 255) private String shipToName;
+    @Column(length = 500) private String shipToAddress;
+    @Column(length = 15)  private String shipToGstin;
+    @Column(length = 2)   private String shipToStateCode;
+
+    @OneToMany(mappedBy = "taxInvoice", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<InvoiceItem> items = new ArrayList<>();
+
+    @CreationTimestamp
+    @Column(updatable = false)
+    private Date creationDate;
+
+    @UpdateTimestamp
+    private Date updatedDate;
+
+    private Date deletedDate;
+}

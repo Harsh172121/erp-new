@@ -1,0 +1,68 @@
+package com.nextgenmanager.nextgenmanager.production.repository.workorder;
+
+import com.nextgenmanager.nextgenmanager.production.enums.MaterialIssueStatus;
+import com.nextgenmanager.nextgenmanager.production.model.WorkOrder;
+import com.nextgenmanager.nextgenmanager.production.model.WorkOrderLine;
+import com.nextgenmanager.nextgenmanager.production.model.WorkOrderMaterial;
+import com.nextgenmanager.nextgenmanager.production.model.WorkOrderOperation;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.List;
+import java.util.Optional;
+
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+public interface WorkOrderMaterialRepository extends JpaRepository<WorkOrderMaterial,Long> {
+
+    @Query("SELECT wm FROM WorkOrderMaterial wm JOIN FETCH wm.component JOIN FETCH wm.workOrder LEFT JOIN FETCH wm.workOrderOperation WHERE wm.id = :id")
+    Optional<WorkOrderMaterial> findByIdWithComponent(@Param("id") Long id);
+
+    List<WorkOrderMaterial> findByWorkOrderId(int workOrderId);
+
+    /**
+     * Materials for any of {@code itemIds} on live, scheduled orders not in {@code finished}: what
+     * other planned work will draw on the same stock and orders.
+     */
+    @Query("SELECT m FROM WorkOrderMaterial m JOIN FETCH m.workOrder w JOIN FETCH m.component c "
+            + "WHERE c.inventoryItemId IN :itemIds AND m.deletedDate IS NULL AND w.deletedDate IS NULL "
+            + "AND w.scheduledAt IS NOT NULL AND w.workOrderStatus NOT IN :finished")
+    List<WorkOrderMaterial> findScheduledDemandForItems(
+            @Param("itemIds") java.util.Collection<Integer> itemIds,
+            @Param("finished") List<com.nextgenmanager.nextgenmanager.production.enums.WorkOrderStatus> finished);
+
+    boolean existsByWorkOrderAndIssueStatusNot(
+            WorkOrder workOrder,
+            MaterialIssueStatus status
+    );
+
+    Optional<WorkOrder> findByIdAndDeletedDateIsNull(Long id);
+
+    List<WorkOrderMaterial> findByWorkOrder(WorkOrder workOrder);
+
+    List<WorkOrderMaterial> findByWorkOrderOperationId(Long operationId);
+
+    List<WorkOrderMaterial> findByWorkOrderAndWorkOrderOperationIsNullAndIssueStatusNot(
+            WorkOrder workOrder,
+            MaterialIssueStatus issueStatus
+    );
+
+    List<WorkOrderMaterial> findByWorkOrderAndWorkOrderOperationIsNull(WorkOrder workOrder);
+
+    List<WorkOrderMaterial> findByWorkOrderAndWorkOrderOperation(WorkOrder workOrder, WorkOrderOperation operation);
+
+    Optional<WorkOrderMaterial> findByInventoryRequestId(Long inventoryRequestId);
+
+    /**
+     * @deprecated scoped to the work order, so on a multi-line work order it returns one row per
+     *             line that consumes the item. Callers that then mutate every row double-count.
+     *             Use {@link #findByWorkOrderLineAndItemId}.
+     */
+    @Deprecated
+    @Query("SELECT m FROM WorkOrderMaterial m WHERE m.workOrder = :wo AND m.component.inventoryItemId = :itemId AND m.deletedDate IS NULL")
+    List<WorkOrderMaterial> findByWorkOrderAndItemId(@Param("wo") WorkOrder workOrder, @Param("itemId") Long itemId);
+
+    /** The material rows for one item within a single line. */
+    @Query("SELECT m FROM WorkOrderMaterial m WHERE m.workOrderLine = :line AND m.component.inventoryItemId = :itemId AND m.deletedDate IS NULL")
+    List<WorkOrderMaterial> findByWorkOrderLineAndItemId(@Param("line") WorkOrderLine line, @Param("itemId") Long itemId);
+}
